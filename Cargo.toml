@@ -2,12 +2,12 @@
 name = "monad-revm"
 description = "Monad variant of Revm"
 version = "0.1.0"
-authors = ["Category Labs"]
-edition = "2024"
+authors = ["Haythem Sellami - Category Labs <hsellami@category.xyz>"]
+edition = "2021"
 keywords = ["monad", "evm", "revm", "ethereum"]
 license = "MIT"
 repository = "https://github.com/category-labs/monad-revm"
-rust-version = "1.83"
+rust-version = "1.88"
 
 [dependencies]
 # revm
