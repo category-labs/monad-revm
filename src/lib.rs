@@ -10,6 +10,8 @@
 pub mod cfg;
 /// Monad-specific instruction set with custom gas costs.
 pub mod instructions;
+/// Monad precompiles with custom gas pricing.
+pub mod precompiles;
 /// Monad specification identifiers and hardfork definitions.
 pub mod spec;
 
