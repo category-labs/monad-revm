@@ -2,7 +2,7 @@
 //!
 //! This crate provides Monad-specific customizations for REVM:
 //! - Gas limit charging (no refunds)
-//! - Custom precompiles
+//! - Custom precompiles (including staking at 0x1000)
 //! - Custom gas costs
 //! - Custom code size limits (128KB max code, 256KB max initcode)
 
@@ -20,6 +20,8 @@ pub mod instructions;
 pub mod precompiles;
 /// Monad specification identifiers and hardfork definitions.
 pub mod spec;
+/// Monad staking precompile (0x1000) - read-only view methods.
+pub mod staking;
 
 pub use api::*;
 pub use cfg::{MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE};
