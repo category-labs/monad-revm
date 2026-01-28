@@ -11,10 +11,11 @@
 //! | ecPairing   | 0x08    | 45,000*  | 225,000*| 5x         |
 //! | blake2f     | 0x09    | rounds×1 | rounds×2| 2x         |
 //! | point eval  | 0x0a    | 50,000   | 200,000 | 4x         |
+//! | staking     | 0x1000  | N/A      | varies  | Monad-only |
 //!
 //! *Base cost per operation
 
-use crate::MonadSpecId;
+use crate::{staking, MonadSpecId};
 use revm::{
     context::Cfg,
     context_interface::ContextTr,
@@ -282,23 +283,99 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
+        // Check if this is the staking precompile first
+        if let Some(result) = staking::run_staking_precompile(context, inputs)? {
+            return Ok(Some(result));
+        }
+
+        // Otherwise, delegate to standard Ethereum precompiles
         self.inner.run(context, inputs)
     }
 
     #[inline]
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        self.inner.warm_addresses()
+        // Include staking precompile address along with standard ones
+        let mut addresses = vec![staking::storage::STAKING_ADDRESS];
+        addresses.extend(self.inner.warm_addresses());
+        Box::new(addresses.into_iter())
     }
 
     #[inline]
     fn contains(&self, address: &Address) -> bool {
-        self.inner.contains(address)
+        *address == staking::storage::STAKING_ADDRESS || self.inner.contains(address)
     }
 }
 
 impl Default for MonadPrecompiles {
     fn default() -> Self {
         Self::new_with_spec(MonadSpecId::MonadEight)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Alloy-EVM PrecompilesMap Integration (for Foundry/Anvil)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Extend a `PrecompilesMap` with Monad-specific precompiles.
+///
+/// This function is designed for integration with Foundry/Anvil which use
+/// `alloy_evm::precompiles::PrecompilesMap`. It adds the staking precompile
+/// via `set_precompile_lookup`.
+#[cfg(feature = "alloy-evm")]
+pub fn extend_monad_precompiles(precompiles: &mut alloy_evm::precompiles::PrecompilesMap) {
+    use crate::staking::{self, storage::STAKING_ADDRESS};
+    use alloy_evm::precompiles::{DynPrecompile, PrecompileInput};
+    use revm::interpreter::InstructionResult;
+
+    precompiles.set_precompile_lookup(move |address: &Address| {
+        if *address == STAKING_ADDRESS {
+            Some(DynPrecompile::new_stateful(
+                PrecompileId::Custom("MonadStaking".into()),
+                |input: PrecompileInput<'_>| -> PrecompileResult {
+                    // Create a storage reader that uses input.internals.sload()
+                    let mut reader = PrecompileInputStorageReader { internals: input.internals };
+
+                    // Run the staking precompile
+                    match staking::run_staking_with_reader(input.data, input.gas, &mut reader) {
+                        Ok(result) => {
+                            // Convert InterpreterResult to PrecompileOutput
+                            let gas_used = input.gas.saturating_sub(result.gas.remaining());
+                            if result.result == InstructionResult::Return {
+                                Ok(PrecompileOutput::new(gas_used, result.output))
+                            } else if result.result == InstructionResult::PrecompileOOG {
+                                Err(PrecompileError::OutOfGas)
+                            } else {
+                                Err(PrecompileError::Other("Staking precompile error".into()))
+                            }
+                        }
+                        Err(e) => Err(PrecompileError::Other(e.into())),
+                    }
+                },
+            ))
+        } else {
+            None
+        }
+    });
+}
+
+/// Storage reader implementation that uses `PrecompileInput.internals.sload()`.
+#[cfg(feature = "alloy-evm")]
+struct PrecompileInputStorageReader<'a> {
+    internals: alloy_evm::EvmInternals<'a>,
+}
+
+#[cfg(feature = "alloy-evm")]
+impl staking::StorageReader for PrecompileInputStorageReader<'_> {
+    fn sload(
+        &mut self,
+        key: revm::primitives::U256,
+    ) -> Result<revm::primitives::U256, PrecompileError> {
+        use crate::staking::storage::STAKING_ADDRESS;
+
+        self.internals
+            .sload(STAKING_ADDRESS, key)
+            .map(|r| r.data)
+            .map_err(|e| PrecompileError::Other(format!("Storage read failed: {e:?}").into()))
     }
 }
 
@@ -403,8 +480,14 @@ mod tests {
             "p256_verify (0x0100) should exist"
         );
 
-        // TODO: Add Monad-specific precompiles when implemented
-        // assert!(precompiles.contains(&revm::precompile::u64_to_address(0x1000)), "staking (0x1000) should exist");
+        // Monad staking precompile is handled separately in run() method
+        // It's not in the standard Precompiles struct but is checked via contains()
+        // The staking address is 0x1000
+        assert_eq!(
+            crate::staking::storage::STAKING_ADDRESS,
+            revm::precompile::u64_to_address(0x1000),
+            "staking address should be 0x1000"
+        );
     }
 
     #[test]
