@@ -15,6 +15,8 @@
 //! | getConsensusValidatorSet | 0xfb29b729 | 2,100 + 2,100/elem |
 //! | getSnapshotValidatorSet | 0xde66a368 | 2,100 + 2,100/elem |
 //! | getExecutionValidatorSet | 0x7cb074df | 2,100 + 2,100/elem |
+//! | getDelegations | 0xa6a7301c | 814,000 |
+//! | getDelegators | 0x48e327d0 | 814,000 |
 
 pub mod abi;
 pub mod interface;
@@ -23,7 +25,7 @@ pub mod types;
 
 // Re-export key types for easier access
 pub use storage::STAKING_ADDRESS;
-pub use types::{Delegator, EpochInfo, Validator, WithdrawalRequest};
+pub use types::{Delegator, EpochInfo, ListNode, Validator, WithdrawalRequest};
 
 use abi::gas;
 use alloy_sol_types::SolCall;
@@ -88,10 +90,12 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         getExecutionValidatorSetCall::SELECTOR => {
             handle_get_execution_validator_set(context, &input_bytes, inputs.gas_limit)
         }
-        // NOT YET IMPLEMENTED: These functions require linked list traversal
-        // which is not yet supported. They return empty arrays for now.
-        getDelegationsCall::SELECTOR => handle_get_delegations_stub(inputs.gas_limit),
-        getDelegatorsCall::SELECTOR => handle_get_delegators_stub(inputs.gas_limit),
+        getDelegationsCall::SELECTOR => {
+            handle_get_delegations(context, &input_bytes, inputs.gas_limit)
+        }
+        getDelegatorsCall::SELECTOR => {
+            handle_get_delegators(context, &input_bytes, inputs.gas_limit)
+        }
         _ => Err(PrecompileError::Other(
             format!("Unknown selector: {:#010x}", u32::from_be_bytes(selector)).into(),
         )),
@@ -335,50 +339,193 @@ fn handle_get_validator_set_impl<CTX: ContextTr>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NOT YET IMPLEMENTED: Linked List Functions
+// Linked List Functions
 // ═══════════════════════════════════════════════════════════════════════════════
-//
-// getDelegations and getDelegators require traversing doubly-linked lists stored
-// in Delegator slots 6-7 (ListNode structure). The linked list implementation
-// tracks delegator-validator relationships and uses sentinel nodes for traversal.
-//
-// These stubs return empty arrays until linked list support is implemented.
-// See types.rs for the ListNode storage layout documentation.
 
-/// Stub handler for getDelegations - NOT YET IMPLEMENTED.
+/// Maximum entries per paginated linked list query (MONAD_EIGHT+).
+const LINKED_LIST_PAGINATION: u32 = 50;
+
+/// Handle getDelegations(address delegator, uint64 startValId)
+///   => (bool isDone, uint64 nextValId, uint64[] valIds)
 ///
-/// Returns empty array. Requires linked list traversal to properly implement.
-fn handle_get_delegations_stub(gas_limit: u64) -> Result<(u64, Bytes), PrecompileError> {
+/// Traverses the delegator's validator linked list using `inext`/`iprev` pointers.
+fn handle_get_delegations<CTX: ContextTr>(
+    context: &mut CTX,
+    input: &[u8],
+    gas_limit: u64,
+) -> Result<(u64, Bytes), PrecompileError> {
     let gas_cost = gas::GET_DELEGATIONS;
     if gas_limit < gas_cost {
         return Err(PrecompileError::OutOfGas);
     }
 
-    // Return: (isDone=true, nextValId=0, valIds=[])
+    let call = getDelegationsCall::abi_decode_raw(&input[4..])
+        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+
+    let (done, next_val_id, val_ids) = traverse_validators_for_delegator(
+        context,
+        &call.delegator,
+        call.startValId,
+        LINKED_LIST_PAGINATION,
+    )?;
+
     let encoded = getDelegationsCall::abi_encode_returns(&getDelegationsReturn {
-        isDone: true,
-        nextValId: 0,
-        valIds: vec![],
+        isDone: done,
+        nextValId: next_val_id,
+        valIds: val_ids,
     });
     Ok((gas_cost, encoded.into()))
 }
 
-/// Stub handler for getDelegators - NOT YET IMPLEMENTED.
+/// Handle getDelegators(uint64 validatorId, address startDelegator)
+///   => (bool isDone, address nextDelegator, address[] delegators)
 ///
-/// Returns empty array. Requires linked list traversal to properly implement.
-fn handle_get_delegators_stub(gas_limit: u64) -> Result<(u64, Bytes), PrecompileError> {
+/// Traverses the validator's delegator linked list using `anext`/`aprev` pointers.
+fn handle_get_delegators<CTX: ContextTr>(
+    context: &mut CTX,
+    input: &[u8],
+    gas_limit: u64,
+) -> Result<(u64, Bytes), PrecompileError> {
     let gas_cost = gas::GET_DELEGATORS;
     if gas_limit < gas_cost {
         return Err(PrecompileError::OutOfGas);
     }
 
-    // Return: (isDone=true, nextDelegator=0x0, delegators=[])
+    let call = getDelegatorsCall::abi_decode_raw(&input[4..])
+        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+
+    let (done, next_delegator, delegators) = traverse_delegators_for_validator(
+        context,
+        call.validatorId,
+        &call.startDelegator,
+        LINKED_LIST_PAGINATION,
+    )?;
+
     let encoded = getDelegatorsCall::abi_encode_returns(&getDelegatorsReturn {
-        isDone: true,
-        nextDelegator: Address::ZERO,
-        delegators: vec![],
+        isDone: done,
+        nextDelegator: next_delegator,
+        delegators,
     });
     Ok((gas_cost, encoded.into()))
+}
+
+/// Read a `ListNode` from delegator storage slots 6-7.
+fn read_list_node<CTX: ContextTr>(
+    context: &mut CTX,
+    val_id: u64,
+    delegator_addr: &Address,
+) -> Result<ListNode, PrecompileError> {
+    let slot6 = read_storage_u256(
+        context,
+        delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE),
+    )?
+    .to_be_bytes::<32>();
+    let slot7 = read_storage_u256(
+        context,
+        delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE + 1),
+    )?
+    .to_be_bytes::<32>();
+    Ok(ListNode::from_slots(slot6, slot7))
+}
+
+/// Traverse the validator list for a given delegator (getDelegations).
+///
+/// Walks `inext` pointers starting from the sentinel node or `start_val_id`.
+/// The sentinel node is at `delegator_key(SENTINEL_VAL_ID, delegator, LIST_NODE)`.
+fn traverse_validators_for_delegator<CTX: ContextTr>(
+    context: &mut CTX,
+    delegator: &Address,
+    start_val_id: u64,
+    limit: u32,
+) -> Result<(bool, u64, Vec<u64>), PrecompileError> {
+    // Determine starting pointer
+    let ptr = if start_val_id == 0 {
+        // Start from head: load sentinel node and follow its inext
+        let sentinel = read_list_node(context, ListNode::SENTINEL_VAL_ID, delegator)?;
+        sentinel.inext
+    } else {
+        start_val_id
+    };
+
+    // Empty list or zero pointer
+    if ptr == 0 {
+        return Ok((true, 0, vec![]));
+    }
+
+    // Validate that ptr is actually in the list (prev != empty)
+    let first_node = read_list_node(context, ptr, delegator)?;
+    if first_node.iprev == 0 {
+        return Ok((true, ptr, vec![]));
+    }
+
+    let mut results = Vec::with_capacity(limit as usize);
+    let mut current_ptr = ptr;
+    let mut current_node = first_node;
+    let mut count = 0u32;
+
+    while current_ptr != 0 && count < limit {
+        results.push(current_ptr);
+        let next = current_node.inext;
+        count += 1;
+
+        if next != 0 && count < limit {
+            current_node = read_list_node(context, next, delegator)?;
+        }
+        current_ptr = next;
+    }
+
+    let done = current_ptr == 0;
+    Ok((done, current_ptr, results))
+}
+
+/// Traverse the delegator list for a given validator (getDelegators).
+///
+/// Walks `anext` pointers starting from the sentinel node or `start_delegator`.
+/// The sentinel node is at `delegator_key(val_id, SENTINEL_ADDRESS, LIST_NODE)`.
+fn traverse_delegators_for_validator<CTX: ContextTr>(
+    context: &mut CTX,
+    val_id: u64,
+    start_delegator: &Address,
+    limit: u32,
+) -> Result<(bool, Address, Vec<Address>), PrecompileError> {
+    // Determine starting pointer
+    let ptr = if *start_delegator == Address::ZERO {
+        // Start from head: load sentinel node and follow its anext
+        let sentinel = read_list_node(context, val_id, &ListNode::SENTINEL_ADDRESS)?;
+        sentinel.anext
+    } else {
+        *start_delegator
+    };
+
+    // Empty list or zero pointer
+    if ptr == Address::ZERO {
+        return Ok((true, Address::ZERO, vec![]));
+    }
+
+    // Validate that ptr is actually in the list (prev != empty)
+    let first_node = read_list_node(context, val_id, &ptr)?;
+    if first_node.aprev == Address::ZERO {
+        return Ok((true, ptr, vec![]));
+    }
+
+    let mut results = Vec::with_capacity(limit as usize);
+    let mut current_ptr = ptr;
+    let mut current_node = first_node;
+    let mut count = 0u32;
+
+    while current_ptr != Address::ZERO && count < limit {
+        results.push(current_ptr);
+        let next = current_node.anext;
+        count += 1;
+
+        if next != Address::ZERO && count < limit {
+            current_node = read_list_node(context, val_id, &next)?;
+        }
+        current_ptr = next;
+    }
+
+    let done = current_ptr == Address::ZERO;
+    Ok((done, current_ptr, results))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -602,10 +749,8 @@ pub fn run_staking_with_reader<R: StorageReader>(
         getExecutionValidatorSetCall::SELECTOR => {
             handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::EXECUTION)
         }
-        // NOT YET IMPLEMENTED: These functions require linked list traversal
-        // which is not yet supported. They return empty arrays for now.
-        getDelegationsCall::SELECTOR => handle_get_delegations_stub(gas_limit),
-        getDelegatorsCall::SELECTOR => handle_get_delegators_stub(gas_limit),
+        getDelegationsCall::SELECTOR => handle_get_delegations_reader(reader, input, gas_limit),
+        getDelegatorsCall::SELECTOR => handle_get_delegators_reader(reader, input, gas_limit),
         _ => Err(PrecompileError::Other(
             format!("Unknown selector: {:#010x}", u32::from_be_bytes(selector)).into(),
         )),
@@ -952,6 +1097,168 @@ fn read_storage_u64_reader<R: StorageReader>(
     // Monad stores u64 values left-aligned (big-endian in first 8 bytes of slot)
     let bytes = value.to_be_bytes::<32>();
     Ok(u64::from_be_bytes(bytes[0..8].try_into().unwrap()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reader-based linked list functions
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn handle_get_delegations_reader<R: StorageReader>(
+    reader: &mut R,
+    input: &[u8],
+    gas_limit: u64,
+) -> Result<(u64, Bytes), PrecompileError> {
+    let gas_cost = gas::GET_DELEGATIONS;
+    if gas_limit < gas_cost {
+        return Err(PrecompileError::OutOfGas);
+    }
+
+    let call = getDelegationsCall::abi_decode_raw(&input[4..])
+        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+
+    let (done, next_val_id, val_ids) = traverse_validators_for_delegator_reader(
+        reader,
+        &call.delegator,
+        call.startValId,
+        LINKED_LIST_PAGINATION,
+    )?;
+
+    let encoded = getDelegationsCall::abi_encode_returns(&getDelegationsReturn {
+        isDone: done,
+        nextValId: next_val_id,
+        valIds: val_ids,
+    });
+    Ok((gas_cost, encoded.into()))
+}
+
+fn handle_get_delegators_reader<R: StorageReader>(
+    reader: &mut R,
+    input: &[u8],
+    gas_limit: u64,
+) -> Result<(u64, Bytes), PrecompileError> {
+    let gas_cost = gas::GET_DELEGATORS;
+    if gas_limit < gas_cost {
+        return Err(PrecompileError::OutOfGas);
+    }
+
+    let call = getDelegatorsCall::abi_decode_raw(&input[4..])
+        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+
+    let (done, next_delegator, delegators) = traverse_delegators_for_validator_reader(
+        reader,
+        call.validatorId,
+        &call.startDelegator,
+        LINKED_LIST_PAGINATION,
+    )?;
+
+    let encoded = getDelegatorsCall::abi_encode_returns(&getDelegatorsReturn {
+        isDone: done,
+        nextDelegator: next_delegator,
+        delegators,
+    });
+    Ok((gas_cost, encoded.into()))
+}
+
+fn read_list_node_reader<R: StorageReader>(
+    reader: &mut R,
+    val_id: u64,
+    delegator_addr: &Address,
+) -> Result<ListNode, PrecompileError> {
+    let slot6 = read_storage_u256_reader(
+        reader,
+        delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE),
+    )?
+    .to_be_bytes::<32>();
+    let slot7 = read_storage_u256_reader(
+        reader,
+        delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE + 1),
+    )?
+    .to_be_bytes::<32>();
+    Ok(ListNode::from_slots(slot6, slot7))
+}
+
+fn traverse_validators_for_delegator_reader<R: StorageReader>(
+    reader: &mut R,
+    delegator: &Address,
+    start_val_id: u64,
+    limit: u32,
+) -> Result<(bool, u64, Vec<u64>), PrecompileError> {
+    let ptr = if start_val_id == 0 {
+        let sentinel = read_list_node_reader(reader, ListNode::SENTINEL_VAL_ID, delegator)?;
+        sentinel.inext
+    } else {
+        start_val_id
+    };
+
+    if ptr == 0 {
+        return Ok((true, 0, vec![]));
+    }
+
+    let first_node = read_list_node_reader(reader, ptr, delegator)?;
+    if first_node.iprev == 0 {
+        return Ok((true, ptr, vec![]));
+    }
+
+    let mut results = Vec::with_capacity(limit as usize);
+    let mut current_ptr = ptr;
+    let mut current_node = first_node;
+    let mut count = 0u32;
+
+    while current_ptr != 0 && count < limit {
+        results.push(current_ptr);
+        let next = current_node.inext;
+        count += 1;
+
+        if next != 0 && count < limit {
+            current_node = read_list_node_reader(reader, next, delegator)?;
+        }
+        current_ptr = next;
+    }
+
+    let done = current_ptr == 0;
+    Ok((done, current_ptr, results))
+}
+
+fn traverse_delegators_for_validator_reader<R: StorageReader>(
+    reader: &mut R,
+    val_id: u64,
+    start_delegator: &Address,
+    limit: u32,
+) -> Result<(bool, Address, Vec<Address>), PrecompileError> {
+    let ptr = if *start_delegator == Address::ZERO {
+        let sentinel = read_list_node_reader(reader, val_id, &ListNode::SENTINEL_ADDRESS)?;
+        sentinel.anext
+    } else {
+        *start_delegator
+    };
+
+    if ptr == Address::ZERO {
+        return Ok((true, Address::ZERO, vec![]));
+    }
+
+    let first_node = read_list_node_reader(reader, val_id, &ptr)?;
+    if first_node.aprev == Address::ZERO {
+        return Ok((true, ptr, vec![]));
+    }
+
+    let mut results = Vec::with_capacity(limit as usize);
+    let mut current_ptr = ptr;
+    let mut current_node = first_node;
+    let mut count = 0u32;
+
+    while current_ptr != Address::ZERO && count < limit {
+        results.push(current_ptr);
+        let next = current_node.anext;
+        count += 1;
+
+        if next != Address::ZERO && count < limit {
+            current_node = read_list_node_reader(reader, val_id, &next)?;
+        }
+        current_ptr = next;
+    }
+
+    let done = current_ptr == Address::ZERO;
+    Ok((done, current_ptr, results))
 }
 
 #[cfg(test)]
