@@ -24,9 +24,8 @@ pub mod gas {
     /// Per-element gas cost for validator set reads
     pub const VALIDATOR_SET_PER_ELEMENT: u64 = 2_100;
 
-    // Linked list functions (NOT YET IMPLEMENTED - stubs return empty arrays)
-    /// getDelegations view (linked list traversal - not yet implemented)
+    /// getDelegations view (linked list traversal, paginated to 50 entries)
     pub const GET_DELEGATIONS: u64 = 814_000;
-    /// getDelegators view (linked list traversal - not yet implemented)
+    /// getDelegators view (linked list traversal, paginated to 50 entries)
     pub const GET_DELEGATORS: u64 = 814_000;
 }

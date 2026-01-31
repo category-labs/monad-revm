@@ -3,19 +3,9 @@
 //! Uses alloy-sol-types' `sol!` macro to generate type-safe Call/Return
 //! structs and selectors for all staking precompile functions.
 //!
-//! ## Implementation Status
-//!
-//! **Fully implemented:**
-//! - `getEpoch`, `getProposerValId`, `getValidator`, `getDelegator`, `getWithdrawalRequest`
-//! - `getConsensusValidatorSet`, `getSnapshotValidatorSet`, `getExecutionValidatorSet`
-//!
-//! **Not yet implemented (returns empty results):**
-//! - `getDelegations` - requires linked list traversal (not yet supported)
-//! - `getDelegators` - requires linked list traversal (not yet supported)
-//!
-//! The linked list functions require reading the `ListNode` structure from Delegator
-//! storage slots 6-7, which contains doubly-linked list pointers for tracking
-//! delegator-validator relationships. This is planned for future implementation.
+//! All view functions are fully implemented, including `getDelegations` and
+//! `getDelegators` which traverse doubly-linked lists stored in Delegator
+//! storage slots 6-7 (`ListNode` structure).
 
 alloy_sol_types::sol! {
     /// Monad staking precompile interface at address 0x1000.

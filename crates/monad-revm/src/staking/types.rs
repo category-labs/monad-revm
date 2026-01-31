@@ -69,15 +69,54 @@ pub struct Delegator {
     pub delta_epoch: u64,
     /// Slot 5: Epoch when next_delta_stake activates (packed)
     pub next_delta_epoch: u64,
-    // Slots 6-7: ListNode (linked list pointers) - NOT YET IMPLEMENTED
-    //
-    // The ListNode structure contains doubly-linked list pointers for:
-    // - getDelegations: tracks which validators a delegator has staked with (inext/iprev)
-    // - getDelegators: tracks which delegators have staked with a validator (anext/aprev)
-    //
-    // Layout (2 slots):
-    //   Slot 6: inext (u64) | iprev (u64) | anext_part1 (16 bytes)
-    //   Slot 7: anext_part2 (4 bytes) | aprev (20 bytes) | padding
+}
+
+/// Linked list node stored in delegator slots 6-7.
+///
+/// Each delegator entry contains pointers for two intrusive doubly-linked lists:
+/// - **Validator list** (`inext`/`iprev`): tracks which validators a delegator stakes with.
+///   Used by `getDelegations`.
+/// - **Delegator list** (`anext`/`aprev`): tracks which delegators stake with a validator.
+///   Used by `getDelegators`.
+///
+/// Storage layout (2 slots, 56 bytes used of 64):
+/// ```text
+/// Slot 6: [inext: u64 (8B)] [iprev: u64 (8B)] [anext bytes 0..16 (16B)]
+/// Slot 7: [anext bytes 16..20 (4B)] [aprev: address (20B)] [padding (8B)]
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ListNode {
+    /// Next validator ID in the delegator's validator list.
+    pub inext: u64,
+    /// Previous validator ID in the delegator's validator list.
+    pub iprev: u64,
+    /// Next delegator address in the validator's delegator list.
+    pub anext: Address,
+    /// Previous delegator address in the validator's delegator list.
+    pub aprev: Address,
+}
+
+impl ListNode {
+    /// Sentinel validator ID (all bits set).
+    pub const SENTINEL_VAL_ID: u64 = u64::MAX;
+
+    /// Sentinel delegator address (all 0xFF bytes).
+    pub const SENTINEL_ADDRESS: Address = Address::new([0xFF; 20]);
+
+    /// Decode a `ListNode` from two raw storage slots (big-endian U256 values).
+    pub fn from_slots(slot6: [u8; 32], slot7: [u8; 32]) -> Self {
+        let inext = u64::from_be_bytes(slot6[0..8].try_into().unwrap());
+        let iprev = u64::from_be_bytes(slot6[8..16].try_into().unwrap());
+
+        let mut anext_bytes = [0u8; 20];
+        anext_bytes[..16].copy_from_slice(&slot6[16..32]);
+        anext_bytes[16..].copy_from_slice(&slot7[..4]);
+        let anext = Address::from(anext_bytes);
+
+        let aprev = Address::from_slice(&slot7[4..24]);
+
+        Self { inext, iprev, anext, aprev }
+    }
 }
 
 /// Withdrawal request (3 storage slots).
