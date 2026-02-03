@@ -35,9 +35,6 @@ auto_impl = "1"
 # alloy
 alloy-sol-types = { version = "1.5", default-features = false }
 
-# alloy-evm (for PrecompilesMap integration with foundry/anvil)
-alloy-evm = { git = "https://github.com/haythemsellami/evm", branch = "main", default-features = false }
-
 # misc
 serde = { version = "1", default-features = false, features = ["derive", "rc"] }
 rstest = "0.24"
