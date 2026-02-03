@@ -1,13 +1,15 @@
 [package]
 name = "monad-revm"
-description = "Monad variant of Revm"
+description = "Monad-specific REVM implementation"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation.workspace = true
+categories.workspace = true
 rust-version.workspace = true
-keywords = ["monad", "evm", "revm", "ethereum"]
+keywords = ["monad", "evm", "revm", "ethereum", "blockchain"]
 
 [lints]
 workspace = true
