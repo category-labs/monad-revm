@@ -22,21 +22,18 @@ alloy-sol-types.workspace = true
 
 # Optional
 serde = { workspace = true, optional = true }
-alloy-evm = { workspace = true, optional = true }
 
 [dev-dependencies]
 rstest.workspace = true
 
 [features]
 default = ["std", "c-kzg", "secp256k1", "portable", "blst", "optional_no_base_fee"]
-std = ["serde?/std", "revm/std", "alloy-evm?/std", "alloy-sol-types/std"]
+std = ["serde?/std", "revm/std", "alloy-sol-types/std"]
 serde = ["dep:serde", "revm/serde"]
 portable = ["revm/portable"]
 c-kzg = ["revm/c-kzg"]
 secp256k1 = ["revm/secp256k1"]
 blst = ["revm/blst"]
-# Enable alloy-evm integration for PrecompilesMap (used by foundry/anvil)
-alloy-evm = ["dep:alloy-evm"]
 
 # Dev features for testing
 dev = [
