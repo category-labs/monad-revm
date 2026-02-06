@@ -42,12 +42,16 @@ impl Default for Validator {
     }
 }
 
-/// Validator flags
+/// Validator flags matching C++ `constants.hpp`.
 pub mod validator_flags {
-    /// Validator has been slashed
-    pub const SLASHED: u64 = 1 << 0;
-    /// Validator has requested exit
-    pub const EXIT_REQUESTED: u64 = 1 << 1;
+    /// Validator is eligible for consensus (no flags set).
+    pub const OK: u64 = 0;
+    /// Validator stake is below the minimum threshold.
+    pub const STAKE_TOO_LOW: u64 = 1 << 0;
+    /// Auth address withdrew below minimum stake.
+    pub const WITHDRAWN: u64 = 1 << 1;
+    /// Validator slashed for double signing.
+    pub const DOUBLE_SIGN: u64 = 1 << 2;
 }
 
 /// Delegator metadata (8 storage slots).
@@ -200,15 +204,17 @@ mod tests {
     #[test]
     fn test_validator_flags() {
         let mut validator = Validator::default();
-        assert!(!validator.has_flag(validator_flags::SLASHED));
+        assert!(!validator.has_flag(validator_flags::STAKE_TOO_LOW));
 
-        validator.flags = validator_flags::SLASHED;
-        assert!(validator.has_flag(validator_flags::SLASHED));
-        assert!(!validator.has_flag(validator_flags::EXIT_REQUESTED));
+        validator.flags = validator_flags::STAKE_TOO_LOW;
+        assert!(validator.has_flag(validator_flags::STAKE_TOO_LOW));
+        assert!(!validator.has_flag(validator_flags::WITHDRAWN));
+        assert!(!validator.has_flag(validator_flags::DOUBLE_SIGN));
 
-        validator.flags = validator_flags::SLASHED | validator_flags::EXIT_REQUESTED;
-        assert!(validator.has_flag(validator_flags::SLASHED));
-        assert!(validator.has_flag(validator_flags::EXIT_REQUESTED));
+        validator.flags = validator_flags::STAKE_TOO_LOW | validator_flags::DOUBLE_SIGN;
+        assert!(validator.has_flag(validator_flags::STAKE_TOO_LOW));
+        assert!(!validator.has_flag(validator_flags::WITHDRAWN));
+        assert!(validator.has_flag(validator_flags::DOUBLE_SIGN));
     }
 
     #[test]
