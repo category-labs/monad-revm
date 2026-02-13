@@ -32,7 +32,7 @@ use alloy_sol_types::SolCall;
 use interface::IMonadStaking::*;
 use revm::{
     context_interface::{ContextTr, JournalTr, LocalContextTr},
-    interpreter::{CallInputs, Gas, InstructionResult, InterpreterResult},
+    interpreter::{CallInputs, CallScheme, Gas, InstructionResult, InterpreterResult},
     precompile::PrecompileError,
     primitives::{Address, Bytes, U256},
 };
@@ -52,6 +52,26 @@ pub fn run_staking_precompile<CTX: ContextTr>(
     // Check if this is the staking precompile address
     if inputs.bytecode_address != STAKING_ADDRESS {
         return Ok(None);
+    }
+
+    // Reject non-CALL schemes (DELEGATECALL, STATICCALL, CALLCODE).
+    // DELEGATECALL would read storage from the wrong address context.
+    // STATICCALL is rejected because some view functions may modify state internally.
+    if inputs.scheme != CallScheme::Call || inputs.is_static {
+        return Ok(Some(InterpreterResult {
+            result: InstructionResult::Revert,
+            gas: Gas::new(inputs.gas_limit),
+            output: Bytes::new(),
+        }));
+    }
+
+    // Staking view functions are not payable
+    if inputs.call_value() != U256::ZERO {
+        return Ok(Some(InterpreterResult {
+            result: InstructionResult::Revert,
+            gas: Gas::new(inputs.gas_limit),
+            output: Bytes::new(),
+        }));
     }
 
     // Get input bytes
