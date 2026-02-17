@@ -1284,6 +1284,27 @@ fn traverse_delegators_for_validator_reader<R: StorageReader>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DefaultMonad;
+    use revm::{
+        database::InMemoryDB,
+        interpreter::{CallInput, CallValue},
+    };
+
+    /// Helper to build a CallInputs targeting the staking precompile.
+    fn staking_call_inputs(scheme: CallScheme, is_static: bool, value: CallValue) -> CallInputs {
+        CallInputs {
+            input: CallInput::Bytes(Bytes::from(getEpochCall::SELECTOR.to_vec())),
+            return_memory_offset: 0..0,
+            gas_limit: 100_000,
+            bytecode_address: STAKING_ADDRESS,
+            known_bytecode: None,
+            target_address: STAKING_ADDRESS,
+            caller: Address::ZERO,
+            value,
+            scheme,
+            is_static,
+        }
+    }
 
     #[test]
     fn test_staking_address_constant() {
@@ -1314,5 +1335,83 @@ mod tests {
         assert_eq!(&encoded[24..32], &100u64.to_be_bytes());
         // Check bool at offset 32
         assert_eq!(encoded[63], 1);
+    }
+
+    #[test]
+    fn test_delegatecall_rejected() {
+        let inputs =
+            staking_call_inputs(CallScheme::DelegateCall, false, CallValue::Transfer(U256::ZERO));
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_staticcall_rejected() {
+        let inputs =
+            staking_call_inputs(CallScheme::StaticCall, false, CallValue::Transfer(U256::ZERO));
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_callcode_rejected() {
+        let inputs =
+            staking_call_inputs(CallScheme::CallCode, false, CallValue::Transfer(U256::ZERO));
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_call_in_static_context_rejected() {
+        let inputs = staking_call_inputs(
+            CallScheme::Call,
+            true, // is_static = true (CALL inside a STATICCALL frame)
+            CallValue::Transfer(U256::ZERO),
+        );
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_nonzero_value_rejected() {
+        let inputs =
+            staking_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::from(1)));
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_plain_call_accepted() {
+        use revm::context_interface::JournalTr;
+
+        let inputs = staking_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
+        // Use InMemoryDB (returns U256::ZERO for uninitialized slots) instead of EmptyDB
+        let mut ctx = crate::api::default_ctx::MonadContext::monad().with_db(InMemoryDB::default());
+        // Warm up the staking account in the journal (normally done by the CALL instruction)
+        ctx.journaled_state.load_account(STAKING_ADDRESS).unwrap();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        // Should not revert — it should succeed (Return) since getEpoch reads default storage
+        assert_eq!(result.result, InstructionResult::Return);
+    }
+
+    #[test]
+    fn test_non_staking_address_returns_none() {
+        let mut inputs =
+            staking_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
+        inputs.bytecode_address = Address::ZERO;
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        assert!(result.is_none(), "non-staking address should return None");
     }
 }
