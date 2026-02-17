@@ -184,8 +184,8 @@ See [monad-foundry](https://github.com/category-labs/foundry) for the complete F
 ## Related Projects
 
 - [revm](https://github.com/bluealloy/revm) — Base Ethereum Virtual Machine
-- [alloy-monad-evm](https://github.com/haythemsellami/evm) — Alloy EVM wrapper for monad-revm
-- [monad-foundry](https://github.com/category-labs/foundry) — Foundry fork with Monad support
+- [alloy-monad-evm](https://github.com/category-labs/alloy-monad-evm) — Alloy EVM wrapper for monad-revm
+- [monad-foundry](https://github.com/category-labs/foundry/tree/monad) — Foundry fork with Monad support
 
 ## References
 
