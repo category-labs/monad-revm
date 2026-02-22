@@ -19,9 +19,11 @@
 //! | getDelegators | 0x48e327d0 | 814,000 |
 
 pub mod abi;
+pub mod constants;
 pub mod interface;
 pub mod storage;
 pub mod types;
+pub mod write;
 
 // Re-export key types for easier access
 pub use storage::STAKING_ADDRESS;
@@ -34,7 +36,7 @@ use revm::{
     context_interface::{ContextTr, JournalTr, LocalContextTr},
     interpreter::{CallInputs, CallScheme, Gas, InstructionResult, InterpreterResult},
     precompile::PrecompileError,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, Log, U256},
 };
 use storage::{
     delegator_key, delegator_offsets, global_slots, validator_key, validator_offsets, valset_slots,
@@ -65,15 +67,6 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         }));
     }
 
-    // Staking view functions are not payable
-    if inputs.call_value() != U256::ZERO {
-        return Ok(Some(InterpreterResult {
-            result: InstructionResult::Revert,
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
-        }));
-    }
-
     // Get input bytes
     let input_bytes: Vec<u8> = match &inputs.input {
         revm::interpreter::CallInput::SharedBuffer(range) => context
@@ -90,7 +83,41 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         .and_then(|s| s.try_into().ok())
         .ok_or("Invalid input: missing selector")?;
 
-    // Dispatch to appropriate handler
+    let call_value = inputs.call_value();
+
+    // Per-selector payability check
+    if call_value != U256::ZERO && !write::is_payable_selector(selector) {
+        return Ok(Some(InterpreterResult {
+            result: InstructionResult::Revert,
+            gas: Gas::new(inputs.gas_limit),
+            output: Bytes::new(),
+        }));
+    }
+
+    // Route write selectors through the write module
+    if write::is_write_selector(selector) {
+        let caller = inputs.caller;
+        let mut storage = ContextTrStorage { context };
+        let result = write::run_staking_write(
+            &input_bytes,
+            inputs.gas_limit,
+            &mut storage,
+            &caller,
+            call_value,
+        )?;
+        return Ok(Some(result));
+    }
+
+    // Non-payable check for read functions (value must be zero)
+    if call_value != U256::ZERO {
+        return Ok(Some(InterpreterResult {
+            result: InstructionResult::Revert,
+            gas: Gas::new(inputs.gas_limit),
+            output: Bytes::new(),
+        }));
+    }
+
+    // Dispatch to read handlers
     let result = match selector {
         getEpochCall::SELECTOR => handle_get_epoch(context, &input_bytes, inputs.gas_limit),
         getProposerValIdCall::SELECTOR => {
@@ -141,7 +168,8 @@ pub fn run_staking_precompile<CTX: ContextTr>(
                 InstructionResult::PrecompileError
             },
             gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
+            // Return error message as raw UTF-8 bytes (matches C++ behavior)
+            output: Bytes::copy_from_slice(e.to_string().as_bytes()),
         })),
     }
 }
@@ -727,6 +755,57 @@ fn read_storage_u64<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<u64,
 pub trait StorageReader {
     /// Read a U256 value from storage at the given key.
     fn sload(&mut self, key: U256) -> Result<U256, PrecompileError>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ContextTr-based StakingStorage (for direct REVM integration)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Wrapper that adapts a `ContextTr` to the [`StorageReader`] and
+/// [`write::StakingStorage`] traits.
+struct ContextTrStorage<'a, CTX: ContextTr> {
+    context: &'a mut CTX,
+}
+
+impl<CTX: ContextTr> StorageReader for ContextTrStorage<'_, CTX> {
+    fn sload(&mut self, key: U256) -> Result<U256, PrecompileError> {
+        self.context
+            .journal_mut()
+            .sload(STAKING_ADDRESS, key)
+            .map(|r| r.data)
+            .map_err(|e| PrecompileError::Other(format!("Storage read failed: {e:?}").into()))
+    }
+}
+
+impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
+    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError> {
+        self.context
+            .journal_mut()
+            .sstore(STAKING_ADDRESS, key, value)
+            .map(|_| ())
+            .map_err(|e| PrecompileError::Other(format!("Storage write failed: {e:?}").into()))
+    }
+
+    fn transfer(
+        &mut self,
+        from: Address,
+        to: Address,
+        amount: U256,
+    ) -> Result<(), PrecompileError> {
+        if amount.is_zero() {
+            return Ok(());
+        }
+        match self.context.journal_mut().transfer(from, to, amount) {
+            Ok(None) => Ok(()),
+            Ok(Some(e)) => Err(PrecompileError::Other(format!("Transfer failed: {e:?}").into())),
+            Err(e) => Err(PrecompileError::Other(format!("Transfer error: {e:?}").into())),
+        }
+    }
+
+    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError> {
+        self.context.journal_mut().log(log);
+        Ok(())
+    }
 }
 
 /// Run the staking precompile with a custom storage reader.
