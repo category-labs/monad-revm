@@ -1559,13 +1559,16 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
     // Read consensus set for snapshot
     let consensus_len = read_u64(s, valset_slots::CONSENSUS)?;
 
-    // Clear previous snapshot
+    // 1. Clear old snapshot set: pop each entry and clear its view slots
     let old_snapshot_len = read_u64(s, valset_slots::SNAPSHOT)?;
     for i in 0..old_snapshot_len {
+        let old_val_id = read_u64(s, valset_slots::SNAPSHOT + U256::from(1 + i))?;
+        write_storage_u256(s, snapshot_view_key(old_val_id, 0), U256::ZERO)?;
+        write_storage_u256(s, snapshot_view_key(old_val_id, 1), U256::ZERO)?;
         write_storage_u64(s, valset_slots::SNAPSHOT + U256::from(1 + i), 0)?;
     }
 
-    // Copy consensus → snapshot (both array and view)
+    // 2. Copy consensus → snapshot (both array and view)
     write_storage_u64(s, valset_slots::SNAPSHOT, consensus_len)?;
     for i in 0..consensus_len {
         let val_id = read_u64(s, valset_slots::CONSENSUS + U256::from(1 + i))?;
@@ -1578,7 +1581,15 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
         write_storage_u256(s, snapshot_view_key(val_id, 1), c_commission)?;
     }
 
-    // Build new consensus set from execution set (top N by stake)
+    // 3. Clear old consensus set: pop each entry and clear its view slots
+    for i in 0..consensus_len {
+        let old_val_id = read_u64(s, valset_slots::CONSENSUS + U256::from(1 + i))?;
+        write_storage_u256(s, consensus_view_key(old_val_id, 0), U256::ZERO)?;
+        write_storage_u256(s, consensus_view_key(old_val_id, 1), U256::ZERO)?;
+        write_storage_u64(s, valset_slots::CONSENSUS + U256::from(1 + i), 0)?;
+    }
+
+    // 4. Build new consensus set from execution set (top N by stake)
     let exec_len = read_u64(s, valset_slots::EXECUTION)?;
     let mut validators: Vec<(u64, U256)> = Vec::with_capacity(exec_len as usize);
     for i in 0..exec_len {
@@ -1599,12 +1610,7 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
     // Take top ACTIVE_VALSET_SIZE
     let new_consensus_len = validators.len().min(ACTIVE_VALSET_SIZE as usize);
 
-    // Clear old consensus set
-    for i in 0..consensus_len {
-        write_storage_u64(s, valset_slots::CONSENSUS + U256::from(1 + i), 0)?;
-    }
-
-    // Write new consensus set
+    // 5. Write new consensus set with view
     write_storage_u64(s, valset_slots::CONSENSUS, new_consensus_len as u64)?;
     for (i, (val_id, _)) in validators.iter().take(new_consensus_len).enumerate() {
         write_storage_u64(s, valset_slots::CONSENSUS + U256::from(1 + i as u64), *val_id)?;
@@ -1764,6 +1770,15 @@ pub const fn is_write_selector(selector: [u8; 4]) -> bool {
     )
 }
 
+/// Check that msg.value is zero (non-payable method guard).
+/// Matches C++ `function_not_payable` which is called inside each non-payable method.
+fn function_not_payable(call_value: &U256) -> Result<(), PrecompileError> {
+    if !call_value.is_zero() {
+        return Err(PrecompileError::Other("value non-zero".into()));
+    }
+    Ok(())
+}
+
 /// Create a fallback result for unknown/short selectors.
 /// Consumes FALLBACK gas (40k) and returns "method not supported" revert.
 fn fallback_result(gas_limit: u64) -> InterpreterResult {
@@ -1799,30 +1814,39 @@ pub fn run_staking_write<S: StakingStorage>(
         None => return Ok(fallback_result(gas_limit)),
     };
 
+    // Dispatch to handler. Payability is checked per-method (matching C++ dispatch-first
+    // semantics). Unknown/fallback selectors don't check payability.
     let result = match selector {
-        changeCommissionCall::SELECTOR => {
-            handle_change_commission(storage, input, gas_limit, caller)
-        }
-        claimRewardsCall::SELECTOR => handle_claim_rewards(storage, input, gas_limit, caller),
-        externalRewardCall::SELECTOR => {
-            handle_external_reward(storage, input, gas_limit, caller, call_value)
-        }
+        // Payable methods (accept msg.value)
         delegateCall::SELECTOR => handle_delegate(storage, input, gas_limit, caller, call_value),
-        undelegateCall::SELECTOR => handle_undelegate(storage, input, gas_limit, caller),
-        withdrawCall::SELECTOR => handle_withdraw(storage, input, gas_limit, caller),
-        compoundCall::SELECTOR => handle_compound(storage, input, gas_limit, caller),
         addValidatorCall::SELECTOR => {
             handle_add_validator(storage, input, gas_limit, caller, call_value)
         }
-        syscallRewardCall::SELECTOR => {
-            handle_syscall_reward(storage, input, gas_limit, caller, call_value)
+        externalRewardCall::SELECTOR => {
+            handle_external_reward(storage, input, gas_limit, caller, call_value)
         }
-        syscallSnapshotCall::SELECTOR => handle_syscall_snapshot(storage, input, gas_limit, caller),
-        syscallOnEpochChangeCall::SELECTOR => {
-            handle_syscall_on_epoch_change(storage, input, gas_limit, caller)
-        }
-        getDelegatorCall::SELECTOR => handle_get_delegator_write(storage, input, gas_limit),
-        // Unknown selector → fallback (40k gas, "method not supported")
+        // Non-payable methods (reject msg.value > 0 inside dispatch)
+        changeCommissionCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_change_commission(storage, input, gas_limit, caller)),
+        claimRewardsCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_claim_rewards(storage, input, gas_limit, caller)),
+        undelegateCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_undelegate(storage, input, gas_limit, caller)),
+        withdrawCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_withdraw(storage, input, gas_limit, caller)),
+        compoundCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_compound(storage, input, gas_limit, caller)),
+        // Syscalls (non-payable)
+        syscallRewardCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_syscall_reward(storage, input, gas_limit, caller, call_value)),
+        syscallSnapshotCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_syscall_snapshot(storage, input, gas_limit, caller)),
+        syscallOnEpochChangeCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_syscall_on_epoch_change(storage, input, gas_limit, caller)),
+        // Mutating getter (non-payable)
+        getDelegatorCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegator_write(storage, input, gas_limit)),
+        // Unknown selector → fallback (no payability check, just "method not supported")
         _ => return Ok(fallback_result(gas_limit)),
     };
 

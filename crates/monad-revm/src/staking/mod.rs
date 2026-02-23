@@ -85,16 +85,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
 
     let call_value = inputs.call_value();
 
-    // Per-selector payability check
-    if call_value != U256::ZERO && !write::is_payable_selector(selector) {
-        return Ok(Some(InterpreterResult {
-            result: InstructionResult::Revert,
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
-        }));
-    }
-
-    // Route write selectors through the write module
+    // Route write selectors through the write module (payability checked per-method inside)
     if write::is_write_selector(selector) {
         let caller = inputs.caller;
         let mut storage = ContextTrStorage { context };
@@ -108,42 +99,39 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         return Ok(Some(result));
     }
 
-    // Non-payable check for read functions (value must be zero)
-    if call_value != U256::ZERO {
-        return Ok(Some(InterpreterResult {
-            result: InstructionResult::Revert,
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
-        }));
-    }
-
-    // Dispatch to read handlers
+    // Read handlers — all non-payable, payability checked after dispatch (matching C++)
+    // Unknown selectors hit fallback without payability check.
+    let not_payable = |v: &U256| -> Result<(), PrecompileError> {
+        if !v.is_zero() {
+            return Err(PrecompileError::Other("value non-zero".into()));
+        }
+        Ok(())
+    };
     let result = match selector {
-        getEpochCall::SELECTOR => handle_get_epoch(context, &input_bytes, inputs.gas_limit),
-        getProposerValIdCall::SELECTOR => {
-            handle_get_proposer_val_id(context, &input_bytes, inputs.gas_limit)
-        }
-        getValidatorCall::SELECTOR => handle_get_validator(context, &input_bytes, inputs.gas_limit),
-        getDelegatorCall::SELECTOR => handle_get_delegator(context, &input_bytes, inputs.gas_limit),
-        getWithdrawalRequestCall::SELECTOR => {
-            handle_get_withdrawal_request(context, &input_bytes, inputs.gas_limit)
-        }
-        getConsensusValidatorSetCall::SELECTOR => {
+        getEpochCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_epoch(context, &input_bytes, inputs.gas_limit)),
+        getProposerValIdCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_proposer_val_id(context, &input_bytes, inputs.gas_limit)),
+        getValidatorCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_validator(context, &input_bytes, inputs.gas_limit)),
+        getDelegatorCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegator(context, &input_bytes, inputs.gas_limit)),
+        getWithdrawalRequestCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_withdrawal_request(context, &input_bytes, inputs.gas_limit)),
+        getConsensusValidatorSetCall::SELECTOR => not_payable(&call_value).and_then(|_| {
             handle_get_consensus_validator_set(context, &input_bytes, inputs.gas_limit)
-        }
-        getSnapshotValidatorSetCall::SELECTOR => {
+        }),
+        getSnapshotValidatorSetCall::SELECTOR => not_payable(&call_value).and_then(|_| {
             handle_get_snapshot_validator_set(context, &input_bytes, inputs.gas_limit)
-        }
-        getExecutionValidatorSetCall::SELECTOR => {
+        }),
+        getExecutionValidatorSetCall::SELECTOR => not_payable(&call_value).and_then(|_| {
             handle_get_execution_validator_set(context, &input_bytes, inputs.gas_limit)
-        }
-        getDelegationsCall::SELECTOR => {
-            handle_get_delegations(context, &input_bytes, inputs.gas_limit)
-        }
-        getDelegatorsCall::SELECTOR => {
-            handle_get_delegators(context, &input_bytes, inputs.gas_limit)
-        }
-        // Unknown selector → fallback (40k gas, "method not supported")
+        }),
+        getDelegationsCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegations(context, &input_bytes, inputs.gas_limit)),
+        getDelegatorsCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegators(context, &input_bytes, inputs.gas_limit)),
+        // Unknown selector → fallback (no payability check, just "method not supported")
         _ => return Ok(Some(reader_fallback_result(inputs.gas_limit))),
     };
 
@@ -822,34 +810,46 @@ pub fn run_staking_with_reader<R: StorageReader>(
     input: &[u8],
     gas_limit: u64,
     reader: &mut R,
+    call_value: U256,
 ) -> Result<InterpreterResult, String> {
-    // C++ routes short input to fallback with 40k gas cost (staking_contract.cpp:773)
+    // C++ routes short input to fallback with 40k gas cost
     let selector: [u8; 4] = match input.get(..4).and_then(|s| s.try_into().ok()) {
         Some(s) => s,
         None => return Ok(reader_fallback_result(gas_limit)),
     };
 
-    // Dispatch to appropriate handler
+    // All read handlers are non-payable. Payability checked per-method (dispatch-first).
+    // Unknown selectors hit fallback without payability check.
+    let not_payable = |v: &U256| -> Result<(), PrecompileError> {
+        if !v.is_zero() {
+            return Err(PrecompileError::Other("value non-zero".into()));
+        }
+        Ok(())
+    };
     let result = match selector {
-        getEpochCall::SELECTOR => handle_get_epoch_reader(reader, input, gas_limit),
-        getProposerValIdCall::SELECTOR => handle_get_proposer_val_id_reader(reader, gas_limit),
-        getValidatorCall::SELECTOR => handle_get_validator_reader(reader, input, gas_limit),
-        getDelegatorCall::SELECTOR => handle_get_delegator_reader(reader, input, gas_limit),
-        getWithdrawalRequestCall::SELECTOR => {
-            handle_get_withdrawal_request_reader(reader, input, gas_limit)
+        getEpochCall::SELECTOR => {
+            not_payable(&call_value).and_then(|_| handle_get_epoch_reader(reader, input, gas_limit))
         }
-        getConsensusValidatorSetCall::SELECTOR => {
-            handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::CONSENSUS)
+        getProposerValIdCall::SELECTOR => {
+            not_payable(&call_value).and_then(|_| handle_get_proposer_val_id_reader(reader, gas_limit))
         }
-        getSnapshotValidatorSetCall::SELECTOR => {
-            handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::SNAPSHOT)
-        }
-        getExecutionValidatorSetCall::SELECTOR => {
-            handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::EXECUTION)
-        }
-        getDelegationsCall::SELECTOR => handle_get_delegations_reader(reader, input, gas_limit),
-        getDelegatorsCall::SELECTOR => handle_get_delegators_reader(reader, input, gas_limit),
-        // Unknown selector → fallback (40k gas, "method not supported")
+        getValidatorCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_validator_reader(reader, input, gas_limit)),
+        getDelegatorCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegator_reader(reader, input, gas_limit)),
+        getWithdrawalRequestCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_withdrawal_request_reader(reader, input, gas_limit)),
+        getConsensusValidatorSetCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::CONSENSUS)),
+        getSnapshotValidatorSetCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::SNAPSHOT)),
+        getExecutionValidatorSetCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::EXECUTION)),
+        getDelegationsCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegations_reader(reader, input, gas_limit)),
+        getDelegatorsCall::SELECTOR => not_payable(&call_value)
+            .and_then(|_| handle_get_delegators_reader(reader, input, gas_limit)),
+        // Unknown selector → fallback (no payability check)
         _ => return Ok(reader_fallback_result(gas_limit)),
     };
 
