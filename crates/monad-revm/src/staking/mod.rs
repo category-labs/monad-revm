@@ -7,21 +7,23 @@
 //!
 //! | Method | Selector | Gas |
 //! |--------|----------|-----|
-//! | getEpoch | 0x757991a8 | 16,200 |
+//! | getEpoch | 0x757991a8 | 200 |
 //! | getProposerValId | 0xfbacb0be | 100 |
 //! | getValidator | 0x2b6d639a | 97,200 |
 //! | getDelegator | 0x573c1ce0 | 184,900 |
 //! | getWithdrawalRequest | 0x56fa2045 | 24,300 |
-//! | getConsensusValidatorSet | 0xfb29b729 | 2,100 + 2,100/elem |
-//! | getSnapshotValidatorSet | 0xde66a368 | 2,100 + 2,100/elem |
-//! | getExecutionValidatorSet | 0x7cb074df | 2,100 + 2,100/elem |
-//! | getDelegations | 0xa6a7301c | 814,000 |
-//! | getDelegators | 0x48e327d0 | 814,000 |
+//! | getConsensusValidatorSet | 0xfb29b729 | 814,000 |
+//! | getSnapshotValidatorSet | 0xde66a368 | 814,000 |
+//! | getExecutionValidatorSet | 0x7cb074df | 814,000 |
+//! | getDelegations | 0x4fd66050 | 814,000 |
+//! | getDelegators | 0xa0843a26 | 814,000 |
 
 pub mod abi;
+pub mod constants;
 pub mod interface;
 pub mod storage;
 pub mod types;
+pub mod write;
 
 // Re-export key types for easier access
 pub use storage::STAKING_ADDRESS;
@@ -34,7 +36,7 @@ use revm::{
     context_interface::{ContextTr, JournalTr, LocalContextTr},
     interpreter::{CallInputs, CallScheme, Gas, InstructionResult, InterpreterResult},
     precompile::PrecompileError,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, Log, U256},
 };
 use storage::{
     delegator_key, delegator_offsets, global_slots, validator_key, validator_offsets, valset_slots,
@@ -65,15 +67,6 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         }));
     }
 
-    // Staking view functions are not payable
-    if inputs.call_value() != U256::ZERO {
-        return Ok(Some(InterpreterResult {
-            result: InstructionResult::Revert,
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
-        }));
-    }
-
     // Get input bytes
     let input_bytes: Vec<u8> = match &inputs.input {
         revm::interpreter::CallInput::SharedBuffer(range) => context
@@ -84,41 +77,60 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         revm::interpreter::CallInput::Bytes(bytes) => bytes.0.to_vec(),
     };
 
-    // Decode selector
-    let selector: [u8; 4] = input_bytes
-        .get(..4)
-        .and_then(|s| s.try_into().ok())
-        .ok_or("Invalid input: missing selector")?;
+    // C++ routes short input to fallback with 40k gas cost (staking_contract.cpp:773)
+    let selector: [u8; 4] = match input_bytes.get(..4).and_then(|s| s.try_into().ok()) {
+        Some(s) => s,
+        None => return Ok(Some(reader_fallback_result(inputs.gas_limit))),
+    };
 
-    // Dispatch to appropriate handler
+    let call_value = inputs.call_value();
+
+    // Route write selectors through the write module (payability checked per-method inside)
+    if write::is_write_selector(selector) {
+        let caller = inputs.caller;
+        let mut storage = ContextTrStorage { context };
+        let result = write::run_staking_write(
+            &input_bytes,
+            inputs.gas_limit,
+            &mut storage,
+            &caller,
+            call_value,
+        )?;
+        return Ok(Some(result));
+    }
+
+    // Read handlers — all non-payable, payability checked after dispatch (matching C++).
+    // Unknown selectors hit fallback without payability check.
     let result = match selector {
-        getEpochCall::SELECTOR => handle_get_epoch(context, &input_bytes, inputs.gas_limit),
-        getProposerValIdCall::SELECTOR => {
-            handle_get_proposer_val_id(context, &input_bytes, inputs.gas_limit)
-        }
-        getValidatorCall::SELECTOR => handle_get_validator(context, &input_bytes, inputs.gas_limit),
-        getDelegatorCall::SELECTOR => handle_get_delegator(context, &input_bytes, inputs.gas_limit),
-        getWithdrawalRequestCall::SELECTOR => {
-            handle_get_withdrawal_request(context, &input_bytes, inputs.gas_limit)
-        }
+        getEpochCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_epoch(context, &input_bytes, inputs.gas_limit)),
+        getProposerValIdCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_proposer_val_id(context, &input_bytes, inputs.gas_limit)),
+        getValidatorCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_validator(context, &input_bytes, inputs.gas_limit)),
+        getDelegatorCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegator(context, &input_bytes, inputs.gas_limit)),
+        getWithdrawalRequestCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_withdrawal_request(context, &input_bytes, inputs.gas_limit)),
         getConsensusValidatorSetCall::SELECTOR => {
-            handle_get_consensus_validator_set(context, &input_bytes, inputs.gas_limit)
+            function_not_payable(&call_value).and_then(|_| {
+                handle_get_consensus_validator_set(context, &input_bytes, inputs.gas_limit)
+            })
         }
-        getSnapshotValidatorSetCall::SELECTOR => {
+        getSnapshotValidatorSetCall::SELECTOR => function_not_payable(&call_value).and_then(|_| {
             handle_get_snapshot_validator_set(context, &input_bytes, inputs.gas_limit)
-        }
+        }),
         getExecutionValidatorSetCall::SELECTOR => {
-            handle_get_execution_validator_set(context, &input_bytes, inputs.gas_limit)
+            function_not_payable(&call_value).and_then(|_| {
+                handle_get_execution_validator_set(context, &input_bytes, inputs.gas_limit)
+            })
         }
-        getDelegationsCall::SELECTOR => {
-            handle_get_delegations(context, &input_bytes, inputs.gas_limit)
-        }
-        getDelegatorsCall::SELECTOR => {
-            handle_get_delegators(context, &input_bytes, inputs.gas_limit)
-        }
-        _ => Err(PrecompileError::Other(
-            format!("Unknown selector: {:#010x}", u32::from_be_bytes(selector)).into(),
-        )),
+        getDelegationsCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegations(context, &input_bytes, inputs.gas_limit)),
+        getDelegatorsCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegators(context, &input_bytes, inputs.gas_limit)),
+        // Unknown selector → fallback (no payability check, just "method not supported")
+        _ => return Ok(Some(reader_fallback_result(inputs.gas_limit))),
     };
 
     // Convert result to InterpreterResult
@@ -134,15 +146,20 @@ pub fn run_staking_precompile<CTX: ContextTr>(
             }
             Ok(Some(interpreter_result))
         }
-        Err(e) => Ok(Some(InterpreterResult {
-            result: if e.is_oog() {
-                InstructionResult::PrecompileOOG
-            } else {
-                InstructionResult::PrecompileError
-            },
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
-        })),
+        Err(e) => {
+            // C++ returns EVMC_REVERT with gas_left=0 (consumes all gas on revert)
+            let mut gas = Gas::new(inputs.gas_limit);
+            let _ = gas.record_cost(inputs.gas_limit);
+            Ok(Some(InterpreterResult {
+                result: if e.is_oog() {
+                    InstructionResult::PrecompileOOG
+                } else {
+                    InstructionResult::Revert
+                },
+                gas,
+                output: Bytes::copy_from_slice(e.to_string().as_bytes()),
+            }))
+        }
     }
 }
 
@@ -312,8 +329,9 @@ fn handle_get_validator_set_impl<CTX: ContextTr>(
     gas_limit: u64,
     base_slot: U256,
 ) -> Result<(u64, Bytes), PrecompileError> {
-    // Base gas check
-    if gas_limit < gas::GET_CONSENSUS_VALIDATOR_SET_BASE {
+    // Flat gas cost for all validator set getters (C++ static_assert: 814,000)
+    let gas_cost = gas::GET_CONSENSUS_VALIDATOR_SET;
+    if gas_limit < gas_cost {
         return Err(PrecompileError::OutOfGas);
     }
 
@@ -329,13 +347,6 @@ fn handle_get_validator_set_impl<CTX: ContextTr>(
     let start = start_index as u64;
     let remaining = length.saturating_sub(start);
     let count = remaining.min(MAX_VALIDATORS_PER_CALL as u64) as u32;
-
-    // Calculate gas cost
-    let gas_cost =
-        gas::GET_CONSENSUS_VALIDATOR_SET_BASE + (count as u64) * gas::VALIDATOR_SET_PER_ELEMENT;
-    if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
-    }
 
     // Read validator IDs
     let mut val_ids = Vec::with_capacity(count as usize);
@@ -729,6 +740,57 @@ pub trait StorageReader {
     fn sload(&mut self, key: U256) -> Result<U256, PrecompileError>;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ContextTr-based StakingStorage (for direct REVM integration)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Wrapper that adapts a `ContextTr` to the [`StorageReader`] and
+/// [`write::StakingStorage`] traits.
+struct ContextTrStorage<'a, CTX: ContextTr> {
+    context: &'a mut CTX,
+}
+
+impl<CTX: ContextTr> StorageReader for ContextTrStorage<'_, CTX> {
+    fn sload(&mut self, key: U256) -> Result<U256, PrecompileError> {
+        self.context
+            .journal_mut()
+            .sload(STAKING_ADDRESS, key)
+            .map(|r| r.data)
+            .map_err(|e| PrecompileError::Other(format!("Storage read failed: {e:?}").into()))
+    }
+}
+
+impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
+    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError> {
+        self.context
+            .journal_mut()
+            .sstore(STAKING_ADDRESS, key, value)
+            .map(|_| ())
+            .map_err(|e| PrecompileError::Other(format!("Storage write failed: {e:?}").into()))
+    }
+
+    fn transfer(
+        &mut self,
+        from: Address,
+        to: Address,
+        amount: U256,
+    ) -> Result<(), PrecompileError> {
+        if amount.is_zero() {
+            return Ok(());
+        }
+        match self.context.journal_mut().transfer(from, to, amount) {
+            Ok(None) => Ok(()),
+            Ok(Some(e)) => Err(PrecompileError::Other(format!("Transfer failed: {e:?}").into())),
+            Err(e) => Err(PrecompileError::Other(format!("Transfer error: {e:?}").into())),
+        }
+    }
+
+    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError> {
+        self.context.journal_mut().log(log);
+        Ok(())
+    }
+}
+
 /// Run the staking precompile with a custom storage reader.
 ///
 /// This function is designed for integration with execution environments that don't
@@ -746,34 +808,46 @@ pub fn run_staking_with_reader<R: StorageReader>(
     input: &[u8],
     gas_limit: u64,
     reader: &mut R,
+    call_value: U256,
 ) -> Result<InterpreterResult, String> {
-    // Decode selector
-    let selector: [u8; 4] =
-        input.get(..4).and_then(|s| s.try_into().ok()).ok_or("Invalid input: missing selector")?;
+    // C++ routes short input to fallback with 40k gas cost
+    let selector: [u8; 4] = match input.get(..4).and_then(|s| s.try_into().ok()) {
+        Some(s) => s,
+        None => return Ok(reader_fallback_result(gas_limit)),
+    };
 
-    // Dispatch to appropriate handler
+    // All read handlers are non-payable. Payability checked per-method (dispatch-first).
+    // Unknown selectors hit fallback without payability check.
     let result = match selector {
-        getEpochCall::SELECTOR => handle_get_epoch_reader(reader, input, gas_limit),
-        getProposerValIdCall::SELECTOR => handle_get_proposer_val_id_reader(reader, gas_limit),
-        getValidatorCall::SELECTOR => handle_get_validator_reader(reader, input, gas_limit),
-        getDelegatorCall::SELECTOR => handle_get_delegator_reader(reader, input, gas_limit),
-        getWithdrawalRequestCall::SELECTOR => {
-            handle_get_withdrawal_request_reader(reader, input, gas_limit)
-        }
+        getEpochCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_epoch_reader(reader, input, gas_limit)),
+        getProposerValIdCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_proposer_val_id_reader(reader, gas_limit)),
+        getValidatorCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_validator_reader(reader, input, gas_limit)),
+        getDelegatorCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegator_reader(reader, input, gas_limit)),
+        getWithdrawalRequestCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_withdrawal_request_reader(reader, input, gas_limit)),
         getConsensusValidatorSetCall::SELECTOR => {
-            handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::CONSENSUS)
+            function_not_payable(&call_value).and_then(|_| {
+                handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::CONSENSUS)
+            })
         }
-        getSnapshotValidatorSetCall::SELECTOR => {
+        getSnapshotValidatorSetCall::SELECTOR => function_not_payable(&call_value).and_then(|_| {
             handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::SNAPSHOT)
-        }
+        }),
         getExecutionValidatorSetCall::SELECTOR => {
-            handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::EXECUTION)
+            function_not_payable(&call_value).and_then(|_| {
+                handle_get_validator_set_reader(reader, input, gas_limit, valset_slots::EXECUTION)
+            })
         }
-        getDelegationsCall::SELECTOR => handle_get_delegations_reader(reader, input, gas_limit),
-        getDelegatorsCall::SELECTOR => handle_get_delegators_reader(reader, input, gas_limit),
-        _ => Err(PrecompileError::Other(
-            format!("Unknown selector: {:#010x}", u32::from_be_bytes(selector)).into(),
-        )),
+        getDelegationsCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegations_reader(reader, input, gas_limit)),
+        getDelegatorsCall::SELECTOR => function_not_payable(&call_value)
+            .and_then(|_| handle_get_delegators_reader(reader, input, gas_limit)),
+        // Unknown selector → fallback (no payability check)
+        _ => return Ok(reader_fallback_result(gas_limit)),
     };
 
     // Convert result to InterpreterResult
@@ -789,16 +863,47 @@ pub fn run_staking_with_reader<R: StorageReader>(
             }
             Ok(interpreter_result)
         }
-        Err(e) => Ok(InterpreterResult {
-            result: if e.is_oog() {
-                InstructionResult::PrecompileOOG
-            } else {
-                InstructionResult::PrecompileError
-            },
-            gas: Gas::new(gas_limit),
-            output: Bytes::new(),
-        }),
+        Err(e) => {
+            // C++ returns EVMC_REVERT with gas_left=0 (consumes all gas on revert)
+            let mut gas = Gas::new(gas_limit);
+            let _ = gas.record_cost(gas_limit);
+            Ok(InterpreterResult {
+                result: if e.is_oog() {
+                    InstructionResult::PrecompileOOG
+                } else {
+                    InstructionResult::Revert
+                },
+                gas,
+                output: Bytes::copy_from_slice(e.to_string().as_bytes()),
+            })
+        }
     }
+}
+
+/// Fallback result for unknown/short selectors in the reader dispatch.
+fn reader_fallback_result(gas_limit: u64) -> InterpreterResult {
+    if gas_limit < gas::FALLBACK {
+        return InterpreterResult {
+            result: InstructionResult::PrecompileOOG,
+            output: Bytes::new(),
+            gas: Gas::new(gas_limit),
+        };
+    }
+    let mut gas = Gas::new(gas_limit);
+    let _ = gas.record_cost(gas_limit);
+    InterpreterResult {
+        result: InstructionResult::Revert,
+        output: Bytes::from("method not supported"),
+        gas,
+    }
+}
+
+/// Check that msg.value is zero (non-payable method guard).
+fn function_not_payable(call_value: &U256) -> Result<(), PrecompileError> {
+    if !call_value.is_zero() {
+        return Err(PrecompileError::Other("value non-zero".into()));
+    }
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -921,8 +1026,9 @@ fn handle_get_validator_set_reader<R: StorageReader>(
     gas_limit: u64,
     base_slot: U256,
 ) -> Result<(u64, Bytes), PrecompileError> {
-    // Base gas check
-    if gas_limit < gas::GET_CONSENSUS_VALIDATOR_SET_BASE {
+    // Flat gas cost for all validator set getters (C++ static_assert: 814,000)
+    let gas_cost = gas::GET_CONSENSUS_VALIDATOR_SET;
+    if gas_limit < gas_cost {
         return Err(PrecompileError::OutOfGas);
     }
 
@@ -937,13 +1043,6 @@ fn handle_get_validator_set_reader<R: StorageReader>(
     let start = start_index as u64;
     let remaining = length.saturating_sub(start);
     let count = remaining.min(MAX_VALIDATORS_PER_CALL as u64) as u32;
-
-    // Calculate gas cost
-    let gas_cost =
-        gas::GET_CONSENSUS_VALIDATOR_SET_BASE + (count as u64) * gas::VALIDATOR_SET_PER_ELEMENT;
-    if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
-    }
 
     // Read validator IDs
     let mut val_ids = Vec::with_capacity(count as usize);
@@ -1291,9 +1390,14 @@ mod tests {
     };
 
     /// Helper to build a CallInputs targeting the staking precompile.
-    fn staking_call_inputs(scheme: CallScheme, is_static: bool, value: CallValue) -> CallInputs {
+    fn staking_call_inputs_with_input(
+        scheme: CallScheme,
+        is_static: bool,
+        value: CallValue,
+        input: Bytes,
+    ) -> CallInputs {
         CallInputs {
-            input: CallInput::Bytes(Bytes::from(getEpochCall::SELECTOR.to_vec())),
+            input: CallInput::Bytes(input),
             return_memory_offset: 0..0,
             gas_limit: 100_000,
             bytecode_address: STAKING_ADDRESS,
@@ -1304,6 +1408,16 @@ mod tests {
             scheme,
             is_static,
         }
+    }
+
+    /// Helper to build a CallInputs with getEpoch selector.
+    fn staking_call_inputs(scheme: CallScheme, is_static: bool, value: CallValue) -> CallInputs {
+        staking_call_inputs_with_input(
+            scheme,
+            is_static,
+            value,
+            Bytes::from(getEpochCall::SELECTOR.to_vec()),
+        )
     }
 
     #[test]
@@ -1388,6 +1502,58 @@ mod tests {
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.output, Bytes::from("value non-zero"));
+    }
+
+    #[test]
+    fn test_unknown_selector_with_nonzero_value_hits_fallback() {
+        let inputs = staking_call_inputs_with_input(
+            CallScheme::Call,
+            false,
+            CallValue::Transfer(U256::from(1)),
+            Bytes::from(vec![0xde, 0xad, 0xbe, 0xef]),
+        );
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.output, Bytes::from("method not supported"));
+    }
+
+    #[test]
+    fn test_reader_unknown_selector_with_nonzero_value_hits_fallback() {
+        struct EmptyReader;
+        impl StorageReader for EmptyReader {
+            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileError> {
+                Ok(U256::ZERO)
+            }
+        }
+
+        let mut reader = EmptyReader;
+        let result =
+            run_staking_with_reader(&[0xde, 0xad, 0xbe, 0xef], 100_000, &mut reader, U256::from(1))
+                .expect("reader execution should succeed");
+
+        assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.output, Bytes::from("method not supported"));
+    }
+
+    #[test]
+    fn test_reader_known_getter_with_nonzero_value_reverts_value_non_zero() {
+        struct EmptyReader;
+        impl StorageReader for EmptyReader {
+            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileError> {
+                Ok(U256::ZERO)
+            }
+        }
+
+        let mut reader = EmptyReader;
+        let input = getEpochCall::SELECTOR.to_vec();
+        let result = run_staking_with_reader(&input, 100_000, &mut reader, U256::from(1))
+            .expect("reader execution should succeed");
+
+        assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.output, Bytes::from("value non-zero"));
     }
 
     #[test]
