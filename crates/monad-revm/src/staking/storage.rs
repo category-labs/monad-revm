@@ -226,10 +226,9 @@ pub fn bitset_bucket_key(val_id: u64) -> U256 {
     let bucket = val_id >> 8;
     let mut key = [0u8; 32];
     key[0] = namespace::VAL_BITSET;
-    // Store bucket as big-endian in the remaining 31 bytes.
-    // bucket is small (u64), so it fits in bytes 24..32 of the key.
+    // Store bucket as big-endian immediately after namespace byte (C++ layout: [ns(1)][bucket(8)][pad(23)]).
     let bucket_bytes = bucket.to_be_bytes();
-    key[24..32].copy_from_slice(&bucket_bytes);
+    key[1..9].copy_from_slice(&bucket_bytes);
     U256::from_be_bytes(key)
 }
 

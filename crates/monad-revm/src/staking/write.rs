@@ -182,7 +182,9 @@ fn read_accumulator<S: StorageReader>(
     val_id: u64,
 ) -> Result<RefCountedAccumulator, PrecompileError> {
     let value = read_u256(s, accumulator_key(epoch, val_id, 0))?;
-    let refcount = read_u64(s, accumulator_key(epoch, val_id, 1))?;
+    // Refcount is stored as u256 (right-aligned standard integer encoding)
+    let refcount_u256 = read_u256(s, accumulator_key(epoch, val_id, 1))?;
+    let refcount = refcount_u256.as_limbs()[0];
     Ok(RefCountedAccumulator { value, refcount })
 }
 
@@ -382,7 +384,8 @@ fn write_accumulator<S: StakingStorage>(
     acc: &RefCountedAccumulator,
 ) -> Result<(), PrecompileError> {
     write_storage_u256(s, accumulator_key(epoch, val_id, 0), acc.value)?;
-    write_storage_u64(s, accumulator_key(epoch, val_id, 1), acc.refcount)?;
+    // Refcount stored as u256 (right-aligned standard integer encoding)
+    write_storage_u256(s, accumulator_key(epoch, val_id, 1), U256::from(acc.refcount))?;
     Ok(())
 }
 
@@ -497,18 +500,18 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         del.next_delta_epoch = 0;
     }
 
-    // Track validator unclaimed_rewards for reward_invariant (matches C++ pull_delegator_up_to_date)
+    // Track validator unclaimed_rewards for reward_invariant
     let mut unclaimed_rewards =
         read_u256(s, validator_key(val_id, validator_offsets::UNCLAIMED_REWARDS))?;
 
-    // Check which delta tracks can be compounded (matches C++ line 686-688).
-    // Both checks use the state BEFORE any compounding, just like C++.
+    // Check which delta tracks can be compounded.
+    // Both checks use the state BEFORE any compounding.
     let can_compound = is_epoch_active(current_epoch, del.delta_epoch) && del.delta_epoch != 0;
     let can_compound_boundary =
         is_epoch_active(current_epoch, del.next_delta_epoch) && del.next_delta_epoch != 0;
 
-    // Compound boundary track first (C++ line 689-699).
-    // When both tracks are active, C++ calls apply_compound twice:
+    // Compound boundary track first.
+    // When both tracks are active, apply_compound is called twice:
     //   1st: uses delta_epoch, promotes next_delta → delta
     //   2nd: uses the newly promoted delta (was next_delta)
     if can_compound_boundary {
@@ -521,7 +524,7 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         del.rewards = del.rewards.saturating_add(rewards);
     }
 
-    // Compound main delta track (C++ line 701-707)
+    // Compound main delta track
     if can_compound {
         let rewards = apply_compound(s, val_id, &mut del)?;
         // reward_invariant: check solvency and deduct from unclaimed
@@ -1056,6 +1059,11 @@ pub fn handle_delegate<S: StakingStorage>(
     if !val.exists() {
         return Err(PrecompileError::Other("unknown validator".into()));
     }
+    // Zero-value delegate is a success no-op
+    if call_value.is_zero() {
+        let encoded = delegateCall::abi_encode_returns(&true);
+        return Ok((gas::DELEGATE, encoded.into()));
+    }
     if call_value < DUST_THRESHOLD {
         return Err(PrecompileError::Other("delegation is too small".into()));
     }
@@ -1129,11 +1137,9 @@ pub fn handle_undelegate<S: StakingStorage>(
     val.stake = val.stake.saturating_sub(amount);
     write_validator_stake(s, call.validatorId, val.stake)?;
 
-    // Update flags
-    let flags = update_validator_flags_after_undelegate(s, call.validatorId, &val, &del, caller)?;
-    if flags != validator_flags::OK {
-        remove_from_valset(s, call.validatorId)?;
-    }
+    // Update flags. Don't remove from valset here — removal happens at snapshot time
+    // via pop-and-swap compaction at snapshot time.
+    update_validator_flags_after_undelegate(s, call.validatorId, &val, &del, caller)?;
 
     // Create withdrawal request with the pre-reset accumulator
     let activation_epoch = get_activation_epoch(s)?;
@@ -1387,6 +1393,41 @@ pub fn handle_add_validator<S: StakingStorage>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// getDelegator Write Handler
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Handle getDelegator as a write operation.
+///
+/// The canonical implementation calls `pull_delegator_up_to_date` which writes settled
+/// state to storage. The gas cost (184,900) includes warm_sstores.
+pub fn handle_get_delegator_write<S: StakingStorage>(
+    s: &mut S,
+    input: &[u8],
+    gas_limit: u64,
+) -> Result<(u64, Bytes), PrecompileError> {
+    if gas_limit < gas::GET_DELEGATOR {
+        return Err(PrecompileError::OutOfGas);
+    }
+
+    let call = getDelegatorCall::abi_decode_raw(&input[4..])
+        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+
+    // pull_delegator_up_to_date persists settled state
+    let del = pull_delegator_up_to_date(s, call.validatorId, &call.delegator)?;
+
+    let encoded = getDelegatorCall::abi_encode_returns(&getDelegatorReturn {
+        stake: del.stake,
+        accRewardPerToken: del.accumulated_reward_per_token,
+        unclaimedRewards: del.rewards,
+        deltaStake: del.delta_stake,
+        nextDeltaStake: del.next_delta_stake,
+        deltaEpoch: del.delta_epoch,
+        nextDeltaEpoch: del.next_delta_epoch,
+    });
+    Ok((gas::GET_DELEGATOR, encoded.into()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Syscall Handlers
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1426,8 +1467,8 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     // Look up validator from block author address
     let val_id = read_u64(s, val_id_secp_key(&block_author))?;
     if val_id == 0 {
-        // No validator for this author, skip
-        return Ok((gas::SYSCALL_REWARD, Bytes::new()));
+        // Unknown author — return NotInValidatorSet error
+        return Err(PrecompileError::Other("not in validator set".into()));
     }
 
     // Get active stake from the appropriate view
@@ -1436,7 +1477,8 @@ pub fn handle_syscall_reward<S: StakingStorage>(
         if in_boundary { snapshot_view_key(val_id, 0) } else { consensus_view_key(val_id, 0) };
     let active_stake = read_u256(s, view_key)?;
     if active_stake.is_zero() {
-        return Ok((gas::SYSCALL_REWARD, Bytes::new()));
+        // Zero active stake — return NotInValidatorSet error
+        return Err(PrecompileError::Other("not in validator set".into()));
     }
 
     // Mint tokens: add block_reward to staking contract balance
@@ -1454,14 +1496,14 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     let commission_amount = block_reward.saturating_mul(commission_rate) / MON;
     let del_reward = block_reward.saturating_sub(commission_amount);
 
-    // Credit commission to auth address delegator rewards (matches C++ line 1721-1725)
+    // Credit commission to auth address delegator rewards
     let val = read_validator(s, val_id)?;
     let auth_addr = val.auth_address;
     let mut auth_del = read_delegator(s, val_id, &auth_addr)?;
     auth_del.rewards = auth_del.rewards.saturating_add(commission_amount);
     write_delegator(s, val_id, &auth_addr, &auth_del)?;
 
-    // Add del_reward (not block_reward) to unclaimed_rewards (matches C++ apply_reward line 755)
+    // Add del_reward (not block_reward) to unclaimed_rewards
     write_validator_unclaimed_rewards(s, val_id, val.unclaimed_rewards.saturating_add(del_reward))?;
 
     // Apply reward to accumulator: acc += (del_reward * UNIT_BIAS) / active_stake
@@ -1471,7 +1513,10 @@ pub fn handle_syscall_reward<S: StakingStorage>(
         write_validator_acc(s, val_id, new_acc)?;
     }
 
-    // Emit ValidatorRewarded event (C++ emits del_reward from apply_reward, with SYSTEM_SENDER)
+    // Write proposer_val_id
+    write_storage_u64(s, global_slots::PROPOSER_VAL_ID, val_id)?;
+
+    // Emit ValidatorRewarded event
     let epoch = read_epoch(s)?;
     let topics = vec![
         ValidatorRewarded::SIGNATURE_HASH,
@@ -1506,8 +1551,10 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
         return Err(PrecompileError::Other("called snapshot while in boundary".into()));
     }
 
-    // Set in_epoch_delay_period = true
-    write_storage_u256(s, global_slots::IN_BOUNDARY, U256::from(1u64))?;
+    // Set in_epoch_delay_period = true (left-aligned bool: byte 0 = 1)
+    let mut boundary_true = [0u8; 32];
+    boundary_true[0] = 1;
+    write_storage_u256(s, global_slots::IN_BOUNDARY, U256::from_be_bytes(boundary_true))?;
 
     // Read consensus set for snapshot
     let consensus_len = read_u64(s, valset_slots::CONSENSUS)?;
@@ -1546,8 +1593,8 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
         }
     }
 
-    // Sort by stake descending
-    validators.sort_by(|a, b| b.1.cmp(&a.1));
+    // Sort by stake descending, then val_id ascending as tie-breaker
+    validators.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     // Take top ACTIVE_VALSET_SIZE
     let new_consensus_len = validators.len().min(ACTIVE_VALSET_SIZE as usize);
@@ -1566,6 +1613,37 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
         write_storage_u256(s, consensus_view_key(*val_id, 0), val.stake)?;
         write_storage_u256(s, consensus_view_key(*val_id, 1), val.commission)?;
     }
+
+    // Compact execution set: remove non-OK validators using pop-and-swap.
+    // Re-read exec_len since we need the current value.
+    let exec_len = read_u64(s, valset_slots::EXECUTION)?;
+    let mut removals: Vec<u64> = Vec::new();
+    for i in 0..exec_len {
+        let vid = read_u64(s, valset_slots::EXECUTION + U256::from(1 + i))?;
+        let addr_flags = read_u256(s, validator_key(vid, validator_offsets::ADDRESS_FLAGS))?
+            .to_be_bytes::<32>();
+        let flags = u64::from_be_bytes(addr_flags[20..28].try_into().unwrap());
+        if flags != validator_flags::OK {
+            removals.push(i);
+        }
+    }
+    let mut current_len = exec_len;
+    for &idx in removals.iter().rev() {
+        let removed_vid = read_u64(s, valset_slots::EXECUTION + U256::from(1 + idx))?;
+        remove_from_valset(s, removed_vid)?;
+        current_len -= 1;
+        if idx < current_len {
+            let last_vid =
+                read_u64(s, valset_slots::EXECUTION + U256::from(1 + current_len))?;
+            write_storage_u64(
+                s,
+                valset_slots::EXECUTION + U256::from(1 + idx),
+                last_vid,
+            )?;
+        }
+        write_storage_u64(s, valset_slots::EXECUTION + U256::from(1 + current_len), 0)?;
+    }
+    write_storage_u64(s, valset_slots::EXECUTION, current_len)?;
 
     Ok((gas::SYSCALL_SNAPSHOT, Bytes::new()))
 }
@@ -1588,21 +1666,22 @@ pub fn handle_syscall_on_epoch_change<S: StakingStorage>(
         .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
 
     let current_epoch = read_epoch(s)?;
-    if call.epoch != current_epoch + 1 {
+    // Allow any strictly increasing epoch (next > last), not just +1
+    if call.epoch <= current_epoch {
         return Err(PrecompileError::Other("invalid epoch change".into()));
     }
 
     let next_epoch = call.epoch;
     let next_next_epoch = next_epoch + 1;
 
-    // Emit EpochChanged event (C++ emits before state changes)
+    // Emit EpochChanged event before state changes
     let topics = vec![EpochChanged::SIGNATURE_HASH];
     let mut data = Vec::with_capacity(64);
     data.extend_from_slice(&U256::from(current_epoch).to_be_bytes::<32>());
     data.extend_from_slice(&U256::from(next_epoch).to_be_bytes::<32>());
     emit_event(s, topics, data)?;
 
-    // Update accumulator values for snapshot validators (C++ lines 1644-1670).
+    // Update accumulator values for snapshot validators.
     // For each validator in the snapshot set, update existing accumulator entries
     // for next_epoch and next_epoch+1 to the current validator acc value.
     // This ensures delta_stake activations use the accumulator at epoch transition,
@@ -1637,7 +1716,7 @@ pub fn handle_syscall_on_epoch_change<S: StakingStorage>(
         }
     }
 
-    // Clear in_epoch_delay_period and set new epoch (C++ lines 1672-1673)
+    // Clear in_epoch_delay_period and set new epoch
     write_storage_u256(s, global_slots::IN_BOUNDARY, U256::ZERO)?;
     write_storage_u64(s, global_slots::EPOCH, next_epoch)?;
 
@@ -1666,7 +1745,7 @@ pub const fn is_syscall_selector(selector: [u8; 4]) -> bool {
     )
 }
 
-/// Check if a selector corresponds to a write function (user-callable or syscall).
+/// Check if a selector corresponds to a write function (user-callable, syscall, or mutating getter).
 pub const fn is_write_selector(selector: [u8; 4]) -> bool {
     matches!(
         selector,
@@ -1681,7 +1760,27 @@ pub const fn is_write_selector(selector: [u8; 4]) -> bool {
             | syscallRewardCall::SELECTOR
             | syscallSnapshotCall::SELECTOR
             | syscallOnEpochChangeCall::SELECTOR
+            | getDelegatorCall::SELECTOR
     )
+}
+
+/// Create a fallback result for unknown/short selectors.
+/// Consumes FALLBACK gas (40k) and returns "method not supported" revert.
+fn fallback_result(gas_limit: u64) -> InterpreterResult {
+    if gas_limit < gas::FALLBACK {
+        return InterpreterResult {
+            result: InstructionResult::PrecompileOOG,
+            output: Bytes::new(),
+            gas: Gas::new(gas_limit),
+        };
+    }
+    let mut gas = Gas::new(gas_limit);
+    let _ = gas.record_cost(gas_limit);
+    InterpreterResult {
+        result: InstructionResult::Revert,
+        output: Bytes::from("method not supported"),
+        gas,
+    }
 }
 
 /// Dispatch a write operation using the StakingStorage trait.
@@ -1694,8 +1793,11 @@ pub fn run_staking_write<S: StakingStorage>(
     caller: &Address,
     call_value: U256,
 ) -> Result<InterpreterResult, String> {
-    let selector: [u8; 4] =
-        input.get(..4).and_then(|s| s.try_into().ok()).ok_or("Invalid input: missing selector")?;
+    // Short input routes to fallback with 40k gas cost
+    let selector: [u8; 4] = match input.get(..4).and_then(|s| s.try_into().ok()) {
+        Some(s) => s,
+        None => return Ok(fallback_result(gas_limit)),
+    };
 
     let result = match selector {
         changeCommissionCall::SELECTOR => {
@@ -1719,9 +1821,9 @@ pub fn run_staking_write<S: StakingStorage>(
         syscallOnEpochChangeCall::SELECTOR => {
             handle_syscall_on_epoch_change(storage, input, gas_limit, caller)
         }
-        _ => Err(PrecompileError::Other(
-            format!("Unknown write selector: {:#010x}", u32::from_be_bytes(selector)).into(),
-        )),
+        getDelegatorCall::SELECTOR => handle_get_delegator_write(storage, input, gas_limit),
+        // Unknown selector → fallback (40k gas, "method not supported")
+        _ => return Ok(fallback_result(gas_limit)),
     };
 
     match result {
@@ -1736,15 +1838,19 @@ pub fn run_staking_write<S: StakingStorage>(
             }
             Ok(ir)
         }
-        Err(e) => Ok(InterpreterResult {
-            result: if e.is_oog() {
-                InstructionResult::PrecompileOOG
-            } else {
-                InstructionResult::Revert
-            },
-            gas: Gas::new(gas_limit),
-            // Return error message as raw UTF-8 bytes (matches C++ behavior)
-            output: Bytes::copy_from_slice(e.to_string().as_bytes()),
-        }),
+        Err(e) => {
+            // Consume all gas on revert (gas_left = 0)
+            let mut gas = Gas::new(gas_limit);
+            let _ = gas.record_cost(gas_limit);
+            Ok(InterpreterResult {
+                result: if e.is_oog() {
+                    InstructionResult::PrecompileOOG
+                } else {
+                    InstructionResult::Revert
+                },
+                gas,
+                output: Bytes::copy_from_slice(e.to_string().as_bytes()),
+            })
+        }
     }
 }
