@@ -1626,8 +1626,8 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
     let mut removals: Vec<u64> = Vec::new();
     for i in 0..exec_len {
         let vid = read_u64(s, valset_slots::EXECUTION + U256::from(1 + i))?;
-        let addr_flags = read_u256(s, validator_key(vid, validator_offsets::ADDRESS_FLAGS))?
-            .to_be_bytes::<32>();
+        let addr_flags =
+            read_u256(s, validator_key(vid, validator_offsets::ADDRESS_FLAGS))?.to_be_bytes::<32>();
         let flags = u64::from_be_bytes(addr_flags[20..28].try_into().unwrap());
         if flags != validator_flags::OK {
             removals.push(i);
@@ -1639,13 +1639,8 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
         remove_from_valset(s, removed_vid)?;
         current_len -= 1;
         if idx < current_len {
-            let last_vid =
-                read_u64(s, valset_slots::EXECUTION + U256::from(1 + current_len))?;
-            write_storage_u64(
-                s,
-                valset_slots::EXECUTION + U256::from(1 + idx),
-                last_vid,
-            )?;
+            let last_vid = read_u64(s, valset_slots::EXECUTION + U256::from(1 + current_len))?;
+            write_storage_u64(s, valset_slots::EXECUTION + U256::from(1 + idx), last_vid)?;
         }
         write_storage_u64(s, valset_slots::EXECUTION + U256::from(1 + current_len), 0)?;
     }
@@ -1836,9 +1831,10 @@ pub fn run_staking_write<S: StakingStorage>(
             .and_then(|_| handle_withdraw(storage, input, gas_limit, caller)),
         compoundCall::SELECTOR => function_not_payable(&call_value)
             .and_then(|_| handle_compound(storage, input, gas_limit, caller)),
-        // Syscalls (non-payable)
-        syscallRewardCall::SELECTOR => function_not_payable(&call_value)
-            .and_then(|_| handle_syscall_reward(storage, input, gas_limit, caller, call_value)),
+        // Syscalls: reward accepts value, snapshot/epoch-change are non-payable.
+        syscallRewardCall::SELECTOR => {
+            handle_syscall_reward(storage, input, gas_limit, caller, call_value)
+        }
         syscallSnapshotCall::SELECTOR => function_not_payable(&call_value)
             .and_then(|_| handle_syscall_snapshot(storage, input, gas_limit, caller)),
         syscallOnEpochChangeCall::SELECTOR => function_not_payable(&call_value)
@@ -1876,5 +1872,240 @@ pub fn run_staking_write<S: StakingStorage>(
                 output: Bytes::copy_from_slice(e.to_string().as_bytes()),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MockStorage {
+        slots: HashMap<U256, U256>,
+        logs: Vec<Log>,
+        transfers: Vec<(Address, Address, U256)>,
+    }
+
+    impl MockStorage {
+        fn set_u64_left(&mut self, key: U256, value: u64) {
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&value.to_be_bytes());
+            self.slots.insert(key, U256::from_be_bytes(bytes));
+        }
+
+        fn get_u64_left(&self, key: U256) -> u64 {
+            let value = self.slots.get(&key).copied().unwrap_or(U256::ZERO);
+            let bytes = value.to_be_bytes::<32>();
+            u64::from_be_bytes(bytes[..8].try_into().unwrap())
+        }
+    }
+
+    impl StorageReader for MockStorage {
+        fn sload(&mut self, key: U256) -> Result<U256, PrecompileError> {
+            Ok(self.slots.get(&key).copied().unwrap_or(U256::ZERO))
+        }
+    }
+
+    impl StakingStorage for MockStorage {
+        fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError> {
+            self.slots.insert(key, value);
+            Ok(())
+        }
+
+        fn transfer(
+            &mut self,
+            from: Address,
+            to: Address,
+            amount: U256,
+        ) -> Result<(), PrecompileError> {
+            self.transfers.push((from, to, amount));
+            Ok(())
+        }
+
+        fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError> {
+            self.logs.push(log);
+            Ok(())
+        }
+    }
+
+    fn address_flags_slot(auth: Address, flags: u64) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[..20].copy_from_slice(auth.as_slice());
+        bytes[20..28].copy_from_slice(&flags.to_be_bytes());
+        U256::from_be_bytes(bytes)
+    }
+
+    #[test]
+    fn test_syscall_reward_accepts_nonzero_call_value() {
+        let mut storage = MockStorage::default();
+
+        let block_author = Address::new([0x11; 20]);
+        let auth_address = Address::new([0x22; 20]);
+        let val_id = 7u64;
+        let reward = U256::from(5u64);
+
+        // Resolve block author -> validator ID
+        storage.set_u64_left(val_id_secp_key(&block_author), val_id);
+
+        // Active in consensus set with zero commission.
+        storage.slots.insert(consensus_view_key(val_id, 0), U256::from(10u64));
+        storage.slots.insert(consensus_view_key(val_id, 1), U256::ZERO);
+
+        // Validator metadata (exists + auth address).
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(auth_address, validator_flags::OK),
+        );
+
+        // Standard ABI calldata (36 bytes). Reward comes from call_value.
+        let input = syscallRewardCall { blockAuthor: block_author }.abi_encode();
+        let result = run_staking_write(
+            &input,
+            gas::SYSCALL_REWARD + 1_000,
+            &mut storage,
+            &SYSTEM_ADDRESS,
+            reward,
+        )
+        .expect("syscall reward should execute");
+
+        assert_eq!(result.result, InstructionResult::Return);
+        assert_eq!(result.output, Bytes::new());
+        assert_eq!(storage.get_u64_left(global_slots::PROPOSER_VAL_ID), val_id);
+        assert_eq!(
+            storage
+                .slots
+                .get(&validator_key(val_id, validator_offsets::UNCLAIMED_REWARDS))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            reward
+        );
+    }
+
+    #[test]
+    fn test_snapshot_clears_stale_snapshot_and_consensus_views() {
+        let mut storage = MockStorage::default();
+
+        let old_snapshot_val = 11u64;
+        let old_consensus_val = 22u64;
+        let new_consensus_val = 33u64;
+
+        // Old snapshot set with stale view.
+        storage.set_u64_left(valset_slots::SNAPSHOT, 1);
+        storage.set_u64_left(valset_slots::SNAPSHOT + U256::from(1u64), old_snapshot_val);
+        storage.slots.insert(snapshot_view_key(old_snapshot_val, 0), U256::from(101u64));
+        storage.slots.insert(snapshot_view_key(old_snapshot_val, 1), U256::from(202u64));
+
+        // Old consensus set and view.
+        storage.set_u64_left(valset_slots::CONSENSUS, 1);
+        storage.set_u64_left(valset_slots::CONSENSUS + U256::from(1u64), old_consensus_val);
+        storage.slots.insert(consensus_view_key(old_consensus_val, 0), U256::from(303u64));
+        storage.slots.insert(consensus_view_key(old_consensus_val, 1), U256::from(404u64));
+
+        // Execution set with one OK validator to become the new consensus entry.
+        storage.set_u64_left(valset_slots::EXECUTION, 1);
+        storage.set_u64_left(valset_slots::EXECUTION + U256::from(1u64), new_consensus_val);
+        storage
+            .slots
+            .insert(validator_key(new_consensus_val, validator_offsets::STAKE), U256::from(999u64));
+        storage.slots.insert(
+            validator_key(new_consensus_val, validator_offsets::COMMISSION),
+            U256::from(77u64),
+        );
+        storage.slots.insert(
+            validator_key(new_consensus_val, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(Address::new([0x33; 20]), validator_flags::OK),
+        );
+
+        let (_gas, output) = handle_syscall_snapshot(
+            &mut storage,
+            &[],
+            gas::SYSCALL_SNAPSHOT + 1_000,
+            &SYSTEM_ADDRESS,
+        )
+        .expect("snapshot should succeed");
+        assert!(output.is_empty());
+
+        // Old snapshot val view cleared.
+        assert_eq!(
+            storage
+                .slots
+                .get(&snapshot_view_key(old_snapshot_val, 0))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::ZERO
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&snapshot_view_key(old_snapshot_val, 1))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::ZERO
+        );
+
+        // Old consensus val view cleared.
+        assert_eq!(
+            storage
+                .slots
+                .get(&consensus_view_key(old_consensus_val, 0))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::ZERO
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&consensus_view_key(old_consensus_val, 1))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::ZERO
+        );
+
+        // Snapshot now contains previous consensus val.
+        assert_eq!(storage.get_u64_left(valset_slots::SNAPSHOT), 1);
+        assert_eq!(
+            storage.get_u64_left(valset_slots::SNAPSHOT + U256::from(1u64)),
+            old_consensus_val
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&snapshot_view_key(old_consensus_val, 0))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::from(303u64)
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&snapshot_view_key(old_consensus_val, 1))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::from(404u64)
+        );
+
+        // Consensus rebuilt from execution.
+        assert_eq!(storage.get_u64_left(valset_slots::CONSENSUS), 1);
+        assert_eq!(
+            storage.get_u64_left(valset_slots::CONSENSUS + U256::from(1u64)),
+            new_consensus_val
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&consensus_view_key(new_consensus_val, 0))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::from(999u64)
+        );
+        assert_eq!(
+            storage
+                .slots
+                .get(&consensus_view_key(new_consensus_val, 1))
+                .copied()
+                .unwrap_or(U256::ZERO),
+            U256::from(77u64)
+        );
     }
 }
