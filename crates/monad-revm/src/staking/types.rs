@@ -121,6 +121,37 @@ impl ListNode {
 
         Self { inext, iprev, anext, aprev }
     }
+
+    /// Encode a `ListNode` into two raw storage slots (big-endian U256 values).
+    ///
+    /// This is the inverse of [`from_slots`](Self::from_slots).
+    pub fn to_slots(&self) -> ([u8; 32], [u8; 32]) {
+        let mut slot6 = [0u8; 32];
+        let mut slot7 = [0u8; 32];
+
+        // Slot 6: [inext: u64 (8B)] [iprev: u64 (8B)] [anext bytes 0..16 (16B)]
+        slot6[0..8].copy_from_slice(&self.inext.to_be_bytes());
+        slot6[8..16].copy_from_slice(&self.iprev.to_be_bytes());
+        slot6[16..32].copy_from_slice(&self.anext.as_slice()[..16]);
+
+        // Slot 7: [anext bytes 16..20 (4B)] [aprev: address (20B)] [padding (8B)]
+        slot7[0..4].copy_from_slice(&self.anext.as_slice()[16..20]);
+        slot7[4..24].copy_from_slice(self.aprev.as_slice());
+
+        (slot6, slot7)
+    }
+}
+
+/// Reference-counted reward accumulator stored per (epoch, val_id).
+///
+/// When a delegation spans an epoch boundary, the accumulator value is
+/// snapshotted and reference-counted so rewards can be calculated correctly.
+#[derive(Debug, Clone, Default)]
+pub struct RefCountedAccumulator {
+    /// Slot 0: Accumulator value at the time of snapshot.
+    pub value: U256,
+    /// Slot 1: Number of delegations referencing this snapshot.
+    pub refcount: u64,
 }
 
 /// Withdrawal request (3 storage slots).
@@ -215,6 +246,33 @@ mod tests {
         assert!(validator.has_flag(validator_flags::STAKE_TOO_LOW));
         assert!(!validator.has_flag(validator_flags::WITHDRAWN));
         assert!(validator.has_flag(validator_flags::DOUBLE_SIGN));
+    }
+
+    #[test]
+    fn test_list_node_roundtrip() {
+        let node = ListNode {
+            inext: 42,
+            iprev: ListNode::SENTINEL_VAL_ID,
+            anext: Address::new([0x11; 20]),
+            aprev: ListNode::SENTINEL_ADDRESS,
+        };
+        let (slot6, slot7) = node.to_slots();
+        let decoded = ListNode::from_slots(slot6, slot7);
+        assert_eq!(decoded.inext, node.inext);
+        assert_eq!(decoded.iprev, node.iprev);
+        assert_eq!(decoded.anext, node.anext);
+        assert_eq!(decoded.aprev, node.aprev);
+    }
+
+    #[test]
+    fn test_list_node_empty_roundtrip() {
+        let node = ListNode::default();
+        let (slot6, slot7) = node.to_slots();
+        let decoded = ListNode::from_slots(slot6, slot7);
+        assert_eq!(decoded.inext, 0);
+        assert_eq!(decoded.iprev, 0);
+        assert_eq!(decoded.anext, Address::ZERO);
+        assert_eq!(decoded.aprev, Address::ZERO);
     }
 
     #[test]

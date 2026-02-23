@@ -186,6 +186,52 @@ pub fn snapshot_view_key(val_id: u64, slot: u8) -> U256 {
     U256::from_be_bytes(key) + U256::from(slot)
 }
 
+/// Generate storage key for reward accumulator (reference-counted).
+///
+/// Base key format: [namespace(1)][epoch(8)][val_id(8)][padding(15)]
+/// Slot 0: value (U256), Slot 1: refcount (u64, left-aligned)
+pub fn accumulator_key(epoch: u64, val_id: u64, slot: u8) -> U256 {
+    let mut key = [0u8; 32];
+    key[0] = namespace::ACCUMULATOR;
+    key[1..9].copy_from_slice(&epoch.to_be_bytes());
+    key[9..17].copy_from_slice(&val_id.to_be_bytes());
+    U256::from_be_bytes(key) + U256::from(slot)
+}
+
+/// Generate storage key for validator ID lookup by secp address.
+///
+/// Key format: [namespace(1)][address(20)][padding(11)]
+pub fn val_id_secp_key(address: &Address) -> U256 {
+    let mut key = [0u8; 32];
+    key[0] = namespace::VAL_ID_SECP;
+    key[1..21].copy_from_slice(address.as_slice());
+    U256::from_be_bytes(key)
+}
+
+/// Generate storage key for validator ID lookup by BLS address.
+///
+/// Key format: [namespace(1)][address(20)][padding(11)]
+pub fn val_id_bls_key(address: &Address) -> U256 {
+    let mut key = [0u8; 32];
+    key[0] = namespace::VAL_ID_BLS;
+    key[1..21].copy_from_slice(address.as_slice());
+    U256::from_be_bytes(key)
+}
+
+/// Generate storage key for validator existence bitset bucket.
+///
+/// Key format: [namespace(1)][bucket(31)]
+/// where bucket = val_id / 256. Bit position within the U256 bucket = val_id & 0xFF.
+pub fn bitset_bucket_key(val_id: u64) -> U256 {
+    let bucket = val_id >> 8;
+    let mut key = [0u8; 32];
+    key[0] = namespace::VAL_BITSET;
+    // Store bucket as big-endian immediately after namespace byte (C++ layout: [ns(1)][bucket(8)][pad(23)]).
+    let bucket_bytes = bucket.to_be_bytes();
+    key[1..9].copy_from_slice(&bucket_bytes);
+    U256::from_be_bytes(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
