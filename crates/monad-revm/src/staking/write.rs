@@ -28,6 +28,37 @@ use revm::{
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Checked Arithmetic Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Checked addition for U256.
+///
+/// C++ parity: checked math failures map to staking internal error.
+fn checked_add_u256(a: U256, b: U256) -> Result<U256, PrecompileError> {
+    a.checked_add(b).ok_or_else(|| PrecompileError::Other("internal error".into()))
+}
+
+/// Checked subtraction for U256.
+///
+/// C++ parity: checked math failures map to staking internal error.
+fn checked_sub_u256(a: U256, b: U256) -> Result<U256, PrecompileError> {
+    a.checked_sub(b).ok_or_else(|| PrecompileError::Other("internal error".into()))
+}
+
+/// Checked multiply-then-divide for U256. Returns `PrecompileError` on
+/// overflow (in the multiplication) or division by zero.
+///
+/// C++ parity: checked math failures map to staking internal error.
+fn checked_mul_div_u256(a: U256, b: U256, d: U256) -> Result<U256, PrecompileError> {
+    if d.is_zero() {
+        return Err(PrecompileError::Other("internal error".into()));
+    }
+    let product =
+        a.checked_mul(b).ok_or_else(|| PrecompileError::Other("internal error".into()))?;
+    Ok(product / d)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // StakingStorage Trait
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -410,12 +441,16 @@ const fn is_epoch_active(current_epoch: u64, active_epoch: u64) -> bool {
 /// Calculate rewards using the accumulator formula.
 ///
 /// `reward = (stake * (epoch_acc - last_acc)) / UNIT_BIAS`
-fn calculate_rewards(stake: U256, epoch_acc: U256, last_acc: U256) -> U256 {
-    if stake.is_zero() || epoch_acc <= last_acc {
-        return U256::ZERO;
-    }
-    let diff = epoch_acc.saturating_sub(last_acc);
-    stake.saturating_mul(diff) / UNIT_BIAS
+fn calculate_rewards(
+    stake: U256,
+    epoch_acc: U256,
+    last_acc: U256,
+) -> Result<U256, PrecompileError> {
+    // Mirror C++ ordering exactly:
+    // 1) checked_sub(current_acc, last_checked_acc)
+    // 2) checked_mul_div(delta, stake, UNIT_BIAS)
+    let diff = checked_sub_u256(epoch_acc, last_acc)?;
+    checked_mul_div_u256(diff, stake, UNIT_BIAS)
 }
 
 /// Increment the accumulator refcount for a validator at the activation epoch.
@@ -464,11 +499,11 @@ fn apply_compound<S: StakingStorage>(
     del: &mut Delegator,
 ) -> Result<U256, PrecompileError> {
     let epoch_acc = decrement_accumulator_refcount(s, del.delta_epoch, val_id)?;
-    let rewards = calculate_rewards(del.stake, epoch_acc, del.accumulated_reward_per_token);
+    let rewards = calculate_rewards(del.stake, epoch_acc, del.accumulated_reward_per_token)?;
     del.accumulated_reward_per_token = epoch_acc;
 
     // Compound: active_stake += delta_stake
-    del.stake = del.stake.saturating_add(del.delta_stake);
+    del.stake = checked_add_u256(del.stake, del.delta_stake)?;
 
     // Promote next_delta → delta
     del.delta_stake = del.next_delta_stake;
@@ -520,8 +555,8 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         if unclaimed_rewards < rewards {
             return Err(PrecompileError::Other("solvency error".into()));
         }
-        unclaimed_rewards = unclaimed_rewards.saturating_sub(rewards);
-        del.rewards = del.rewards.saturating_add(rewards);
+        unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
+        del.rewards = checked_add_u256(del.rewards, rewards)?;
     }
 
     // Compound main delta track
@@ -531,22 +566,22 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         if unclaimed_rewards < rewards {
             return Err(PrecompileError::Other("solvency error".into()));
         }
-        unclaimed_rewards = unclaimed_rewards.saturating_sub(rewards);
-        del.rewards = del.rewards.saturating_add(rewards);
+        unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
+        del.rewards = checked_add_u256(del.rewards, rewards)?;
     }
 
     // Accrue rewards for active stake
     if !del.stake.is_zero() {
         let val_acc =
             read_u256(s, validator_key(val_id, validator_offsets::ACCUMULATED_REWARD_PER_TOKEN))?;
-        let rewards = calculate_rewards(del.stake, val_acc, del.accumulated_reward_per_token);
+        let rewards = calculate_rewards(del.stake, val_acc, del.accumulated_reward_per_token)?;
         // reward_invariant: check solvency and deduct from unclaimed
         if unclaimed_rewards < rewards {
             return Err(PrecompileError::Other("solvency error".into()));
         }
-        unclaimed_rewards = unclaimed_rewards.saturating_sub(rewards);
+        unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
         del.accumulated_reward_per_token = val_acc;
-        del.rewards = del.rewards.saturating_add(rewards);
+        del.rewards = checked_add_u256(del.rewards, rewards)?;
     }
 
     // Write back updated unclaimed_rewards
@@ -841,7 +876,7 @@ fn internal_delegate<S: StakingStorage>(
     // Add to appropriate delta track
     if in_boundary {
         let need_acc = del.next_delta_epoch == 0;
-        del.next_delta_stake = del.next_delta_stake.saturating_add(amount);
+        del.next_delta_stake = checked_add_u256(del.next_delta_stake, amount)?;
         del.next_delta_epoch = activation_epoch;
         write_delegator(s, val_id, caller, &del)?;
         if need_acc {
@@ -849,7 +884,7 @@ fn internal_delegate<S: StakingStorage>(
         }
     } else {
         let need_acc = del.delta_epoch == 0;
-        del.delta_stake = del.delta_stake.saturating_add(amount);
+        del.delta_stake = checked_add_u256(del.delta_stake, amount)?;
         del.delta_epoch = activation_epoch;
         write_delegator(s, val_id, caller, &del)?;
         if need_acc {
@@ -859,7 +894,7 @@ fn internal_delegate<S: StakingStorage>(
 
     // Update validator total stake
     let mut val = read_validator(s, val_id)?;
-    val.stake = val.stake.saturating_add(amount);
+    val.stake = checked_add_u256(val.stake, amount)?;
     write_validator_stake(s, val_id, val.stake)?;
 
     // Update flags
@@ -1015,13 +1050,13 @@ pub fn handle_external_reward<S: StakingStorage>(
     }
 
     // Apply reward: accumulator += (reward * UNIT_BIAS) / active_stake
-    let reward_acc = call_value.saturating_mul(UNIT_BIAS) / active_stake;
-    let new_acc = val.accumulated_reward_per_token.saturating_add(reward_acc);
+    let reward_acc = checked_mul_div_u256(call_value, UNIT_BIAS, active_stake)?;
+    let new_acc = checked_add_u256(val.accumulated_reward_per_token, reward_acc)?;
     write_validator_acc(s, call.validatorId, new_acc)?;
     write_validator_unclaimed_rewards(
         s,
         call.validatorId,
-        val.unclaimed_rewards.saturating_add(call_value),
+        checked_add_u256(val.unclaimed_rewards, call_value)?,
     )?;
 
     // Emit ValidatorRewarded event
@@ -1118,7 +1153,7 @@ pub fn handle_undelegate<S: StakingStorage>(
     }
 
     // Dust collection
-    let remaining = del.stake.saturating_sub(amount);
+    let remaining = checked_sub_u256(del.stake, amount)?;
     if !remaining.is_zero() && remaining < DUST_THRESHOLD {
         amount = del.stake; // collect all including dust
     }
@@ -1127,14 +1162,14 @@ pub fn handle_undelegate<S: StakingStorage>(
     let wr_acc = del.accumulated_reward_per_token;
 
     // Update delegator stake
-    del.stake = del.stake.saturating_sub(amount);
+    del.stake = checked_sub_u256(del.stake, amount)?;
     if del.stake.is_zero() {
         del.accumulated_reward_per_token = U256::ZERO;
     }
 
     // Update validator stake
     let mut val = read_validator(s, call.validatorId)?;
-    val.stake = val.stake.saturating_sub(amount);
+    val.stake = checked_sub_u256(val.stake, amount)?;
     write_validator_stake(s, call.validatorId, val.stake)?;
 
     // Update flags. Don't remove from valset here — removal happens at snapshot time
@@ -1217,7 +1252,7 @@ pub fn handle_withdraw<S: StakingStorage>(
 
     // Decrement accumulator and calculate rewards
     let epoch_acc = decrement_accumulator_refcount(s, wr_epoch, call.validatorId)?;
-    let rewards = calculate_rewards(wr_amount, epoch_acc, wr_acc);
+    let rewards = calculate_rewards(wr_amount, epoch_acc, wr_acc)?;
 
     // Check solvency
     let val = read_validator(s, call.validatorId)?;
@@ -1227,11 +1262,11 @@ pub fn handle_withdraw<S: StakingStorage>(
     write_validator_unclaimed_rewards(
         s,
         call.validatorId,
-        val.unclaimed_rewards.saturating_sub(rewards),
+        checked_sub_u256(val.unclaimed_rewards, rewards)?,
     )?;
 
     // Transfer total payout
-    let total_payout = wr_amount.saturating_add(rewards);
+    let total_payout = checked_add_u256(wr_amount, rewards)?;
     s.transfer(STAKING_ADDRESS, *caller, total_payout)?;
 
     // Clear withdrawal request
@@ -1493,23 +1528,27 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     let commission_rate = read_u256(s, commission_view_key)?;
 
     // Calculate commission: commission_amount = (block_reward * commission_rate) / MON
-    let commission_amount = block_reward.saturating_mul(commission_rate) / MON;
-    let del_reward = block_reward.saturating_sub(commission_amount);
+    let commission_amount = checked_mul_div_u256(block_reward, commission_rate, MON)?;
+    let del_reward = checked_sub_u256(block_reward, commission_amount)?;
 
     // Credit commission to auth address delegator rewards
     let val = read_validator(s, val_id)?;
     let auth_addr = val.auth_address;
     let mut auth_del = read_delegator(s, val_id, &auth_addr)?;
-    auth_del.rewards = auth_del.rewards.saturating_add(commission_amount);
+    auth_del.rewards = checked_add_u256(auth_del.rewards, commission_amount)?;
     write_delegator(s, val_id, &auth_addr, &auth_del)?;
 
     // Add del_reward (not block_reward) to unclaimed_rewards
-    write_validator_unclaimed_rewards(s, val_id, val.unclaimed_rewards.saturating_add(del_reward))?;
+    write_validator_unclaimed_rewards(
+        s,
+        val_id,
+        checked_add_u256(val.unclaimed_rewards, del_reward)?,
+    )?;
 
     // Apply reward to accumulator: acc += (del_reward * UNIT_BIAS) / active_stake
     if !del_reward.is_zero() && !active_stake.is_zero() {
-        let reward_acc = del_reward.saturating_mul(UNIT_BIAS) / active_stake;
-        let new_acc = val.accumulated_reward_per_token.saturating_add(reward_acc);
+        let reward_acc = checked_mul_div_u256(del_reward, UNIT_BIAS, active_stake)?;
+        let new_acc = checked_add_u256(val.accumulated_reward_per_token, reward_acc)?;
         write_validator_acc(s, val_id, new_acc)?;
     }
 
@@ -2107,5 +2146,277 @@ mod tests {
                 .unwrap_or(U256::ZERO),
             U256::from(77u64)
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Checked arithmetic helper unit tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_checked_add_normal() {
+        assert_eq!(checked_add_u256(U256::from(1), U256::from(2)).unwrap(), U256::from(3));
+    }
+
+    #[test]
+    fn test_checked_add_overflow_reverts() {
+        let result = checked_add_u256(U256::MAX, U256::from(1));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    #[test]
+    fn test_checked_sub_normal() {
+        assert_eq!(checked_sub_u256(U256::from(5), U256::from(3)).unwrap(), U256::from(2));
+    }
+
+    #[test]
+    fn test_checked_sub_underflow_reverts() {
+        let result = checked_sub_u256(U256::from(3), U256::from(5));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    #[test]
+    fn test_checked_mul_div_normal() {
+        // (10 * 3) / 5 = 6
+        assert_eq!(
+            checked_mul_div_u256(U256::from(10), U256::from(3), U256::from(5)).unwrap(),
+            U256::from(6)
+        );
+    }
+
+    #[test]
+    fn test_checked_mul_div_overflow_reverts() {
+        let result = checked_mul_div_u256(U256::MAX, U256::from(2), U256::from(1));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    #[test]
+    fn test_checked_mul_div_zero_divisor_reverts() {
+        let result = checked_mul_div_u256(U256::from(10), U256::from(3), U256::ZERO);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Reward calculation overflow tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_calculate_rewards_normal() {
+        // reward = (stake * (epoch_acc - last_acc)) / UNIT_BIAS
+        let stake = U256::from(1000) * MON;
+        let last_acc = U256::from(100);
+        let epoch_acc = U256::from(200);
+        let result = calculate_rewards(stake, epoch_acc, last_acc);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_calculate_rewards_zero_stake() {
+        let result = calculate_rewards(U256::ZERO, U256::from(100), U256::from(100));
+        assert_eq!(result.unwrap(), U256::ZERO);
+    }
+
+    #[test]
+    fn test_calculate_rewards_epoch_acc_eq_last_acc() {
+        let result = calculate_rewards(U256::from(1000), U256::from(100), U256::from(100));
+        assert_eq!(result.unwrap(), U256::ZERO);
+    }
+
+    #[test]
+    fn test_calculate_rewards_epoch_acc_lt_last_acc_reverts() {
+        let result = calculate_rewards(U256::from(1000), U256::from(100), U256::from(200));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    #[test]
+    fn test_calculate_rewards_overflow_reverts() {
+        // stake * diff would overflow U256 when both are near MAX
+        let result = calculate_rewards(U256::MAX, U256::MAX, U256::ZERO);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Syscall reward overflow tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_syscall_reward_commission_mul_overflow_reverts() {
+        let mut storage = MockStorage::default();
+        let block_author = Address::new([0x11; 20]);
+        let auth_address = Address::new([0x22; 20]);
+        let val_id = 1u64;
+
+        // Setup validator
+        storage.set_u64_left(val_id_secp_key(&block_author), val_id);
+        storage.slots.insert(consensus_view_key(val_id, 0), U256::from(10u64));
+        // Commission rate near MAX to trigger mul overflow with large reward
+        storage.slots.insert(consensus_view_key(val_id, 1), U256::MAX);
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(auth_address, validator_flags::OK),
+        );
+
+        let input = syscallRewardCall { blockAuthor: block_author }.abi_encode();
+        // block_reward near MAX * commission_rate near MAX → overflow
+        let result = run_staking_write(
+            &input,
+            gas::SYSCALL_REWARD + 1_000,
+            &mut storage,
+            &SYSTEM_ADDRESS,
+            U256::MAX / U256::from(2),
+        )
+        .expect("dispatch should not error");
+
+        // Should revert (not silently clamp)
+        assert_eq!(result.result, InstructionResult::Revert);
+    }
+
+    #[test]
+    fn test_syscall_reward_normal_values_succeed() {
+        let mut storage = MockStorage::default();
+        let block_author = Address::new([0x11; 20]);
+        let auth_address = Address::new([0x22; 20]);
+        let val_id = 1u64;
+        let block_reward = U256::from(2) * MON; // 2 MON
+
+        // Setup validator
+        storage.set_u64_left(val_id_secp_key(&block_author), val_id);
+        storage.slots.insert(consensus_view_key(val_id, 0), U256::from(100) * MON);
+        // 10% commission
+        storage.slots.insert(consensus_view_key(val_id, 1), MON / U256::from(10));
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(auth_address, validator_flags::OK),
+        );
+
+        let input = syscallRewardCall { blockAuthor: block_author }.abi_encode();
+        let result = run_staking_write(
+            &input,
+            gas::SYSCALL_REWARD + 1_000,
+            &mut storage,
+            &SYSTEM_ADDRESS,
+            block_reward,
+        )
+        .expect("dispatch should not error");
+
+        assert_eq!(result.result, InstructionResult::Return);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // External reward overflow tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_external_reward_accumulator_overflow_reverts() {
+        let mut storage = MockStorage::default();
+        let caller = Address::new([0xAA; 20]);
+        let val_id = 1u64;
+
+        // Setup validator with accumulator near MAX
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(caller, validator_flags::OK),
+        );
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ACCUMULATED_REWARD_PER_TOKEN),
+            U256::MAX,
+        );
+        storage.slots.insert(consensus_view_key(val_id, 0), U256::from(1u64));
+        storage.slots.insert(consensus_view_key(val_id, 1), U256::ZERO);
+
+        // call_value * UNIT_BIAS overflows when call_value is large
+        let call_value = MAX_EXTERNAL_REWARD;
+        let input = externalRewardCall { validatorId: val_id }.abi_encode();
+        let result = handle_external_reward(
+            &mut storage,
+            &input,
+            gas::EXTERNAL_REWARD + 1_000,
+            &caller,
+            call_value,
+        );
+
+        // Should fail because new_acc = MAX + reward_acc overflows
+        assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Delegate overflow tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_internal_delegate_validator_stake_overflow_reverts() {
+        let mut storage = MockStorage::default();
+        let caller = Address::new([0xBB; 20]);
+        let val_id = 1u64;
+
+        // Validator exists with stake near MAX
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(caller, validator_flags::OK),
+        );
+        storage.slots.insert(validator_key(val_id, validator_offsets::STAKE), U256::MAX);
+        // Set epoch so pull_delegator_up_to_date works
+        storage.set_u64_left(global_slots::EPOCH, 1);
+
+        // Delegate amount that would overflow validator stake
+        let result = internal_delegate(&mut storage, val_id, &caller, U256::from(1));
+
+        assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Withdraw payout overflow tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_withdraw_payout_overflow_reverts() {
+        let mut storage = MockStorage::default();
+        let caller = Address::new([0xCC; 20]);
+        let val_id = 1u64;
+        let wid = 0u8;
+
+        // Withdrawal request with near-MAX amount
+        storage
+            .slots
+            .insert(withdrawal_key(val_id, &caller, wid, withdrawal_offsets::AMOUNT), U256::MAX);
+        // Accumulator with diff that would produce non-zero rewards
+        storage.slots.insert(
+            withdrawal_key(val_id, &caller, wid, withdrawal_offsets::ACCUMULATOR),
+            U256::from(1u64),
+        );
+        // Withdrawal epoch set to far past
+        let mut wr_epoch_bytes = [0u8; 32];
+        wr_epoch_bytes[..8].copy_from_slice(&1u64.to_be_bytes());
+        storage.slots.insert(
+            withdrawal_key(val_id, &caller, wid, withdrawal_offsets::EPOCH),
+            U256::from_be_bytes(wr_epoch_bytes),
+        );
+
+        // Current epoch well past withdrawal delay
+        storage.set_u64_left(global_slots::EPOCH, 100);
+
+        // Accumulator for epoch 1, val_id: has refcount and value > wr_acc
+        storage.slots.insert(accumulator_key(1, val_id, 0), U256::from(100u64));
+        storage.slots.insert(accumulator_key(1, val_id, 1), U256::from(1u64));
+
+        // Validator unclaimed_rewards large enough for solvency
+        storage
+            .slots
+            .insert(validator_key(val_id, validator_offsets::UNCLAIMED_REWARDS), U256::MAX);
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(caller, validator_flags::OK),
+        );
+
+        let input = withdrawCall { validatorId: val_id, withdrawId: wid }.abi_encode();
+        let result = handle_withdraw(&mut storage, &input, gas::WITHDRAW + 1_000, &caller);
+
+        // calculate_rewards with stake=MAX and acc diff will overflow in mul_div
+        assert!(result.is_err());
     }
 }
