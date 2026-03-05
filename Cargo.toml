@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Haythem Sellami - Category Labs <hsellami@category.xyz>"]
@@ -26,7 +26,7 @@ use-self = "warn"
 redundant-clone = "warn"
 
 [workspace.dependencies]
-monad-revm = { version = "0.1.0", path = "crates/monad-revm", default-features = false }
+monad-revm = { version = "0.2.0", path = "crates/monad-revm", default-features = false }
 
 # revm
 revm = { version = "34.0.0", default-features = false }
