@@ -3,7 +3,9 @@ use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::EthInstructions,
     interpreter::{
-        instructions::instruction_table_gas_changes_spec, interpreter::EthInterpreter, Host,
+        instructions::{instruction_table_gas_changes_spec, Instruction},
+        interpreter::EthInterpreter,
+        Host,
     },
 };
 
@@ -44,16 +46,76 @@ pub fn monad_gas_params(spec: MonadSpecId) -> GasParams {
     params
 }
 
-// Create Monad instructions table with custom gas costs.
-/// This function combines:
-/// 1. Standard instruction table for the underlying Ethereum spec
-/// 2. Any custom Monad opcodes (future)
+/// Create Monad instructions table with custom gas costs.
 ///
-/// Note: Gas params are now stored in CfgEnv, not in instructions.
-/// Use `monad_gas_params()` with `MonadCfgEnv` for custom gas costs.
+/// For MonadNine+ (MIP-3), all memory-expanding opcodes are replaced with
+/// Monad-local handlers that use the linear cost model (`words / 2`).
 pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
-    EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec)
+    let mut instructions =
+        EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec);
+
+    // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
+    if MonadSpecId::MonadNine.is_enabled_in(spec) {
+        use crate::memory::opcodes;
+        use revm::bytecode::opcode::*;
+        use revm::interpreter::instructions::gas;
+
+        // Memory opcodes
+        instructions.insert_instruction(MLOAD, Instruction::new(opcodes::mload, 3));
+        instructions.insert_instruction(MSTORE, Instruction::new(opcodes::mstore, 3));
+        instructions.insert_instruction(MSTORE8, Instruction::new(opcodes::mstore8, 3));
+        instructions.insert_instruction(MCOPY, Instruction::new(opcodes::mcopy, 3));
+
+        // Hash
+        instructions
+            .insert_instruction(KECCAK256, Instruction::new(opcodes::keccak256, gas::KECCAK256));
+
+        // Copy opcodes
+        instructions.insert_instruction(CALLDATACOPY, Instruction::new(opcodes::calldatacopy, 3));
+        instructions.insert_instruction(CODECOPY, Instruction::new(opcodes::codecopy, 3));
+        instructions
+            .insert_instruction(RETURNDATACOPY, Instruction::new(opcodes::returndatacopy, 3));
+        instructions.insert_instruction(
+            EXTCODECOPY,
+            Instruction::new(opcodes::extcodecopy, gas::WARM_STORAGE_READ_COST),
+        );
+
+        // Log opcodes
+        instructions.insert_instruction(LOG0, Instruction::new(opcodes::log::<0, _>, gas::LOG));
+        instructions.insert_instruction(LOG1, Instruction::new(opcodes::log::<1, _>, gas::LOG));
+        instructions.insert_instruction(LOG2, Instruction::new(opcodes::log::<2, _>, gas::LOG));
+        instructions.insert_instruction(LOG3, Instruction::new(opcodes::log::<3, _>, gas::LOG));
+        instructions.insert_instruction(LOG4, Instruction::new(opcodes::log::<4, _>, gas::LOG));
+
+        // Create opcodes
+        instructions
+            .insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
+        instructions
+            .insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
+
+        // Call opcodes
+        instructions
+            .insert_instruction(CALL, Instruction::new(opcodes::call, gas::WARM_STORAGE_READ_COST));
+        instructions.insert_instruction(
+            CALLCODE,
+            Instruction::new(opcodes::call_code, gas::WARM_STORAGE_READ_COST),
+        );
+        instructions.insert_instruction(
+            DELEGATECALL,
+            Instruction::new(opcodes::delegate_call, gas::WARM_STORAGE_READ_COST),
+        );
+        instructions.insert_instruction(
+            STATICCALL,
+            Instruction::new(opcodes::static_call, gas::WARM_STORAGE_READ_COST),
+        );
+
+        // Return opcodes
+        instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret, 0));
+        instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert, 0));
+    }
+
+    instructions
 }
 
 /// Monad cold storage access cost (SLOAD, SSTORE).
