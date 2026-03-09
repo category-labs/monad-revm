@@ -169,7 +169,7 @@ mod tests {
         },
         database::InMemoryDB,
         inspector::NoOpInspector,
-        primitives::{Address, B256, TxKind},
+        primitives::{Address, TxKind, B256},
         ExecuteEvm,
     };
 
@@ -341,11 +341,7 @@ mod tests {
     /// Helper to create a RecoveredAuthorization with a specific authority address.
     fn make_recovered_auth(authority: Address) -> RecoveredAuthorization {
         RecoveredAuthorization::new_unchecked(
-            Authorization {
-                chain_id: U256::from(1),
-                address: Address::from([0xAA; 20]),
-                nonce: 0,
-            },
+            Authorization { chain_id: U256::from(1), address: Address::from([0xAA; 20]), nonce: 0 },
             RecoveredAuthority::Valid(authority),
         )
     }
@@ -429,7 +425,10 @@ mod tests {
 
         // Should succeed (not rejected at validation)
         let result = evm.transact(tx);
-        assert!(result.is_ok(), "EIP-7702 with normal authority should be accepted, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "EIP-7702 with normal authority should be accepted, got: {result:?}"
+        );
     }
 
     #[test]
