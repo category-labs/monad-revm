@@ -8,6 +8,9 @@ use core::ops::{Deref, DerefMut};
 use revm::context::{Cfg, CfgEnv};
 use revm::context_interface::cfg::GasParams;
 
+/// MIP-3: Maximum memory per transaction (8 MB), pooled across the call stack.
+pub const MONAD_MEMORY_LIMIT: u64 = 8 * 1024 * 1024;
+
 /// Monad maximum contract code size.
 ///
 /// Monad uses a larger code size limit than Ethereum's EIP-170 (24KB).
@@ -186,7 +189,11 @@ impl Cfg for MonadCfgEnv {
     }
 
     fn memory_limit(&self) -> u64 {
-        <CfgEnv<MonadSpecId> as Cfg>::memory_limit(&self.0)
+        if MonadSpecId::MonadNine.is_enabled_in(self.0.spec) {
+            MONAD_MEMORY_LIMIT
+        } else {
+            <CfgEnv<MonadSpecId> as Cfg>::memory_limit(&self.0)
+        }
     }
 
     fn gas_params(&self) -> &GasParams {

@@ -16,6 +16,8 @@ pub mod evm;
 pub mod handler;
 /// Monad-specific instruction set with custom gas costs.
 pub mod instructions;
+/// MIP-3: Linear memory cost model with 8 MB pooled limit.
+pub mod memory;
 /// Monad precompiles with custom gas pricing.
 pub mod precompiles;
 /// Monad specification identifiers and hardfork definitions.
