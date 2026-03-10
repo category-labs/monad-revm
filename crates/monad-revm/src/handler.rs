@@ -21,6 +21,7 @@ use revm::{
 
 use crate::chain::MonadChainContext;
 use crate::journal::MonadJournalTr;
+use crate::reserve_balance::tracker::ReserveBalanceInit;
 use crate::staking::constants::SYSTEM_ADDRESS;
 
 use crate::api::exec::MonadContextTr;
@@ -110,25 +111,23 @@ where
         let gas_limit = evm.ctx().tx().gas_limit();
         let spec = evm.ctx().cfg().spec();
         let chain = evm.ctx().chain().clone();
-        let (sender_is_delegated, sender_original_balance, sender_account) = {
+        let (sender_is_delegated, sender_account) = {
             let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
             (
                 sender_account.info.code.as_ref().is_some_and(revm::bytecode::Bytecode::is_eip7702),
-                sender_account.original_info.balance,
                 sender_account.clone(),
             )
         };
 
-        evm.ctx().journal_mut().reserve_balance_mut().init(
-            &chain,
+        evm.ctx().journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &chain,
             spec,
             sender,
             effective_gas_price,
             gas_limit,
             sender_is_delegated,
-            sender_original_balance,
-            Some(&sender_account),
-        );
+            sender_account: Some(&sender_account),
+        });
         Ok(gas)
     }
 

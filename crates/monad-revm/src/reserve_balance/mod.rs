@@ -99,6 +99,7 @@ mod tests {
         journal::MonadJournalTr,
         reserve_balance::{
             abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
+            tracker::ReserveBalanceInit,
         },
         MonadCfgEnv, MonadSpecId,
     };
@@ -333,16 +334,15 @@ mod tests {
         let mut ctx =
             monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
         let chain = ctx.chain().clone();
-        ctx.journal_mut().reserve_balance_mut().init(
-            &chain,
-            MonadSpecId::MonadNine,
+        ctx.journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &chain,
+            spec: MonadSpecId::MonadNine,
             sender,
-            0,
-            0,
-            false,
-            U256::from(1_000_000u64),
-            None,
-        );
+            effective_gas_price: 0,
+            gas_limit: 0,
+            sender_is_delegated: false,
+            sender_account: None,
+        });
         ctx.journal_mut()
             .transfer(tracked, recipient, U256::from(1u64))
             .expect("transfer should succeed");
