@@ -1,6 +1,9 @@
 // ExecuteEvm implementations for MonadEvm.
 
-use crate::{evm::MonadEvm, handler::MonadHandler, instructions::MonadInstructions, MonadSpecId};
+use crate::{
+    chain::MonadChainContext, evm::MonadEvm, handler::MonadHandler,
+    instructions::MonadInstructions, journal::MonadJournalTr, MonadSpecId,
+};
 use revm::{
     context::{result::ExecResultAndState, ContextSetters},
     context_interface::{
@@ -19,15 +22,21 @@ use revm::{
 
 /// Trait alias for Monad context requirements.
 pub trait MonadContextTr:
-    ContextTr<Journal: JournalTr<State = EvmState>, Tx: Transaction, Cfg: Cfg<Spec = MonadSpecId>>
+    ContextTr<
+    Journal: MonadJournalTr<State = EvmState>,
+    Tx: Transaction,
+    Cfg: Cfg<Spec = MonadSpecId>,
+    Chain = MonadChainContext,
+>
 {
 }
 
 impl<T> MonadContextTr for T where
     T: ContextTr<
-        Journal: JournalTr<State = EvmState>,
+        Journal: MonadJournalTr<State = EvmState>,
         Tx: Transaction,
         Cfg: Cfg<Spec = MonadSpecId>,
+        Chain = MonadChainContext,
     >
 {
 }

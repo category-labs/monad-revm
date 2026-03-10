@@ -1,10 +1,11 @@
 // Default Monad context type and factory.
 
-use crate::MonadCfgEnv;
+use crate::{MonadCfgEnv, MonadChainContext, MonadJournal, MonadSpecId};
 use revm::{
-    context::{BlockEnv, TxEnv},
-    database_interface::EmptyDB,
-    Context, Journal, MainContext,
+    context::{BlockEnv, LocalContext, TxEnv},
+    context_interface::JournalTr,
+    database_interface::{Database, EmptyDB},
+    Context,
 };
 
 /// Type alias for the default Monad context.
@@ -13,7 +14,8 @@ use revm::{
 /// The key difference is:
 /// - Using `MonadSpecId` instead of `SpecId`
 /// - Using `MonadCfgEnv` which has Monad-specific defaults (128KB code size limit)
-pub type MonadContext<DB> = Context<BlockEnv, TxEnv, MonadCfgEnv, DB, Journal<DB>, ()>;
+pub type MonadContext<DB> =
+    Context<BlockEnv, TxEnv, MonadCfgEnv, DB, MonadJournal<DB>, MonadChainContext>;
 
 /// Trait for creating a default Monad context.
 pub trait DefaultMonad {
@@ -21,9 +23,24 @@ pub trait DefaultMonad {
     fn monad() -> MonadContext<EmptyDB>;
 }
 
+/// Creates a Monad context with the given database backend.
+pub fn monad_context_with_db<DB: Database>(db: DB) -> MonadContext<DB> {
+    let mut journaled_state = MonadJournal::new(db);
+    journaled_state.set_spec_id(MonadSpecId::default().into());
+    Context {
+        block: BlockEnv::default(),
+        tx: TxEnv::default(),
+        cfg: MonadCfgEnv::new(),
+        journaled_state,
+        chain: MonadChainContext::default(),
+        local: LocalContext::default(),
+        error: Ok(()),
+    }
+}
+
 impl DefaultMonad for MonadContext<EmptyDB> {
     fn monad() -> Self {
-        Context::mainnet().with_cfg(MonadCfgEnv::new())
+        monad_context_with_db(EmptyDB::new())
     }
 }
 
