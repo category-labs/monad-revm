@@ -15,10 +15,9 @@
 //!
 //! *Base cost per operation
 
-use crate::{staking, MonadSpecId};
+use crate::{api::exec::MonadContextTr, reserve_balance, staking, MonadSpecId};
 use revm::{
     context::Cfg,
-    context_interface::ContextTr,
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
     precompile::{
@@ -264,7 +263,7 @@ impl MonadPrecompiles {
 
 impl<CTX> PrecompileProvider<CTX> for MonadPrecompiles
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadSpecId>>,
+    CTX: MonadContextTr,
 {
     type Output = InterpreterResult;
 
@@ -288,6 +287,10 @@ where
             return Ok(Some(result));
         }
 
+        if let Some(result) = reserve_balance::run_reserve_balance_precompile(context, inputs)? {
+            return Ok(Some(result));
+        }
+
         // Otherwise, delegate to standard Ethereum precompiles
         self.inner.run(context, inputs)
     }
@@ -296,13 +299,19 @@ where
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
         // Include staking precompile address along with standard ones
         let mut addresses = vec![staking::storage::STAKING_ADDRESS];
+        if MonadSpecId::MonadNine.is_enabled_in(self.spec) {
+            addresses.push(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
+        }
         addresses.extend(self.inner.warm_addresses());
         Box::new(addresses.into_iter())
     }
 
     #[inline]
     fn contains(&self, address: &Address) -> bool {
-        *address == staking::storage::STAKING_ADDRESS || self.inner.contains(address)
+        *address == staking::storage::STAKING_ADDRESS
+            || (MonadSpecId::MonadNine.is_enabled_in(self.spec)
+                && *address == reserve_balance::abi::RESERVE_BALANCE_ADDRESS)
+            || self.inner.contains(address)
     }
 }
 

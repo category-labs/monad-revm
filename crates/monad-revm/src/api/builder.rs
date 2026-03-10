@@ -1,10 +1,10 @@
 use crate::{
-    evm::MonadEvm, instructions::MonadInstructions, precompiles::MonadPrecompiles, MonadSpecId,
+    evm::MonadEvm, instructions::MonadInstructions, precompiles::MonadPrecompiles,
+    MonadChainContext, MonadJournal, MonadSpecId,
 };
 use revm::{
     context::Cfg,
-    context_interface::{Block, JournalTr, Transaction},
-    state::EvmState,
+    context_interface::{Block, LocalContextTr, Transaction},
     Context, Database,
 };
 
@@ -27,14 +27,14 @@ pub trait MonadBuilder: Sized {
     ) -> DefaultMonadEvm<Self::Context, INSP>;
 }
 
-impl<BLOCK, TX, CFG, DB, JOURNAL, CHAIN> MonadBuilder
-    for Context<BLOCK, TX, CFG, DB, JOURNAL, CHAIN>
+impl<BLOCK, TX, CFG, DB, LOCAL> MonadBuilder
+    for Context<BLOCK, TX, CFG, DB, MonadJournal<DB>, MonadChainContext, LOCAL>
 where
     BLOCK: Block,
     TX: Transaction,
     CFG: Cfg<Spec = MonadSpecId>,
     DB: Database,
-    JOURNAL: JournalTr<Database = DB, State = EvmState>,
+    LOCAL: LocalContextTr,
 {
     type Context = Self;
 

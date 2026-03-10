@@ -17,9 +17,10 @@ use revm::{
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{interpreter::EthInterpreter, interpreter_action::FrameInit},
     primitives::{hardfork::SpecId, U256},
-    state::EvmState,
 };
 
+use crate::chain::MonadChainContext;
+use crate::journal::MonadJournalTr;
 use crate::staking::constants::SYSTEM_ADDRESS;
 
 use crate::api::exec::MonadContextTr;
@@ -51,7 +52,7 @@ impl<EVM, ERROR, FRAME> Default for MonadHandler<EVM, ERROR, FRAME> {
 
 impl<EVM, ERROR, FRAME> Handler for MonadHandler<EVM, ERROR, FRAME>
 where
-    EVM: EvmTr<Context: ContextTr<Journal: JournalTr<State = EvmState>>, Frame = FRAME>,
+    EVM: EvmTr<Context: MonadContextTr, Frame = FRAME>,
     ERROR: EvmTrError<EVM>,
     FRAME: FrameTr<FrameResult = FrameResult, FrameInit = FrameInit>,
 {
@@ -98,6 +99,39 @@ where
         validation::validate_tx_env(evm.ctx(), spec).map_err(Into::into)
     }
 
+    fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
+        self.validate_against_state_and_deduct_caller(evm)?;
+        self.load_accounts(evm)?;
+        let gas = self.apply_eip7702_auth_list(evm)?;
+
+        let sender = evm.ctx().tx().caller();
+        let basefee = evm.ctx().block().basefee() as u128;
+        let effective_gas_price = evm.ctx().tx().effective_gas_price(basefee);
+        let gas_limit = evm.ctx().tx().gas_limit();
+        let spec = evm.ctx().cfg().spec();
+        let chain = evm.ctx().chain().clone();
+        let (sender_is_delegated, sender_original_balance, sender_account) = {
+            let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
+            (
+                sender_account.info.code.as_ref().is_some_and(revm::bytecode::Bytecode::is_eip7702),
+                sender_account.original_info.balance,
+                sender_account.clone(),
+            )
+        };
+
+        evm.ctx().journal_mut().reserve_balance_mut().init(
+            &chain,
+            spec,
+            sender,
+            effective_gas_price,
+            gas_limit,
+            sender_is_delegated,
+            sender_original_balance,
+            Some(&sender_account),
+        );
+        Ok(gas)
+    }
+
     // Disable gas refunds
     fn refund(
         &self,
@@ -130,7 +164,8 @@ where
         let basefee = ctx.block().basefee() as u128;
         let effective_gas_price = ctx.tx().effective_gas_price(basefee);
 
-        let coinbase_gas_price = if ctx.cfg().spec().into().is_enabled_in(SpecId::LONDON) {
+        let eth_spec: SpecId = ctx.cfg().spec().into();
+        let coinbase_gas_price = if eth_spec.is_enabled_in(SpecId::LONDON) {
             effective_gas_price.saturating_sub(basefee)
         } else {
             effective_gas_price
@@ -148,7 +183,7 @@ where
 impl<EVM, ERROR> InspectorHandler for MonadHandler<EVM, ERROR, EthFrame<EthInterpreter>>
 where
     EVM: InspectorEvmTr<
-        Context: MonadContextTr,
+        Context: MonadContextTr<Chain = MonadChainContext, Journal: MonadJournalTr>,
         Frame = EthFrame<EthInterpreter>,
         Inspector: Inspector<<<Self as Handler>::Evm as EvmTr>::Context, EthInterpreter>,
     >,
@@ -160,7 +195,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{api::builder::MonadBuilder, api::default_ctx::DefaultMonad};
+    use crate::{
+        api::builder::MonadBuilder,
+        api::default_ctx::{monad_context_with_db, DefaultMonad},
+    };
     use revm::{
         context::{result::EVMError, Context, TxEnv},
         context_interface::{
@@ -214,7 +252,7 @@ mod tests {
         // Coinbase starts with 0 balance
         db.insert_account_info(coinbase, revm::state::AccountInfo::default());
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
 
         // Set block beneficiary
@@ -257,7 +295,7 @@ mod tests {
             revm::state::AccountInfo { balance: initial_balance, ..Default::default() },
         );
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         evm.ctx().block.basefee = 0;
 
@@ -315,7 +353,7 @@ mod tests {
             },
         );
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         evm.ctx().block.basefee = 0;
 
@@ -362,7 +400,7 @@ mod tests {
             },
         );
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         evm.ctx().block.basefee = 0;
 
@@ -408,7 +446,7 @@ mod tests {
             },
         );
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         evm.ctx().block.basefee = 0;
 
@@ -445,7 +483,7 @@ mod tests {
             },
         );
 
-        let ctx = Context::monad().with_db(db);
+        let ctx = monad_context_with_db(db);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         evm.ctx().block.basefee = 0;
 

@@ -12,5 +12,5 @@ pub use block::{
     apply_syscall_snapshot,
 };
 pub use builder::{DefaultMonadEvm, MonadBuilder};
-pub use default_ctx::{DefaultMonad, MonadContext};
+pub use default_ctx::{monad_context_with_db, DefaultMonad, MonadContext};
 pub use exec::{MonadContextTr, MonadError};
