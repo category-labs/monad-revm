@@ -182,7 +182,9 @@ pub fn keccak256<WIRE: InterpreterTypes, H: Host + ?Sized>(
     } else {
         let from = revm_interpreter::as_usize_or_fail!(context.interpreter, offset);
         resize_memory_mip3!(context.interpreter, from, len);
-        revm::primitives::keccak256(context.interpreter.memory.slice_len(from, len).as_ref() as &[u8])
+        revm::primitives::keccak256(
+            context.interpreter.memory.slice_len(from, len).as_ref() as &[u8]
+        )
     };
     *top = hash.into();
 }
