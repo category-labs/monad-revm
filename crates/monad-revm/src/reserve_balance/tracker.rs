@@ -7,6 +7,25 @@ use revm::{
     state::Account,
 };
 
+/// Input data used to initialize the reserve-balance tracker for a transaction.
+#[derive(Clone, Copy, Debug)]
+pub struct ReserveBalanceInit<'a> {
+    /// Monad chain metadata for sender-dip checks and reserve policy.
+    pub chain: &'a MonadChainContext,
+    /// Active Monad hardfork.
+    pub spec: MonadSpecId,
+    /// Transaction sender.
+    pub sender: Address,
+    /// Effective gas price used to charge the transaction.
+    pub effective_gas_price: u128,
+    /// Transaction gas limit.
+    pub gas_limit: u64,
+    /// Whether the sender is delegated.
+    pub sender_is_delegated: bool,
+    /// Optional loaded sender account.
+    pub sender_account: Option<&'a Account>,
+}
+
 /// Cached reserve-balance state for the current transaction.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReserveBalanceTracker {
@@ -38,26 +57,16 @@ impl ReserveBalanceTracker {
     }
 
     /// Initializes the tracker for a new transaction.
-    pub fn init(
-        &mut self,
-        chain: &MonadChainContext,
-        spec: MonadSpecId,
-        sender: Address,
-        effective_gas_price: u128,
-        gas_limit: u64,
-        sender_is_delegated: bool,
-        _sender_original_balance: U256,
-        sender_account: Option<&Account>,
-    ) {
+    pub fn init(&mut self, init: ReserveBalanceInit<'_>) {
         self.clear();
         self.tracking_enabled = true;
-        self.chain = chain.clone();
-        self.use_recent_code_hash = MonadSpecId::MonadEight.is_enabled_in(spec);
-        self.sender = sender;
-        self.allow_init_selfdestruct_exemption = MonadSpecId::MonadNine.is_enabled_in(spec);
-        self.sender_gas_fees = U256::from(effective_gas_price) * U256::from(gas_limit);
-        self.sender_can_dip = chain.sender_can_dip(self.sender, sender_is_delegated);
-        self.update_loaded_account(sender_account, self.sender);
+        self.chain = init.chain.clone();
+        self.use_recent_code_hash = MonadSpecId::MonadEight.is_enabled_in(init.spec);
+        self.sender = init.sender;
+        self.allow_init_selfdestruct_exemption = MonadSpecId::MonadNine.is_enabled_in(init.spec);
+        self.sender_gas_fees = U256::from(init.effective_gas_price) * U256::from(init.gas_limit);
+        self.sender_can_dip = init.chain.sender_can_dip(self.sender, init.sender_is_delegated);
+        self.update_loaded_account(init.sender_account, self.sender);
     }
 
     /// Recomputes the violation status of an address after a debit.
