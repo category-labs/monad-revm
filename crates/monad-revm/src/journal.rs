@@ -37,6 +37,11 @@ pub struct MonadJournal<DB: Database> {
 }
 
 impl<DB: Database> MonadJournal<DB> {
+    /// Consumes the journal and returns the wrapped database.
+    pub fn into_database(self) -> DB {
+        self.inner.database
+    }
+
     /// Creates a new Monad journal from an existing journal inner state.
     pub fn new_with_inner(
         database: DB,
