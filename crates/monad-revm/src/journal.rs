@@ -58,8 +58,12 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     fn on_checkpoint_revert(&mut self, checkpoint: JournalCheckpoint) {
-        let reverted_addresses: Vec<_> = self.inner.journal[checkpoint.journal_i..]
-            .iter()
+        let reverted_addresses: Vec<_> = self
+            .inner
+            .journal
+            .get(checkpoint.journal_i..)
+            .into_iter()
+            .flatten()
             .flat_map(reverted_addresses_from_entry)
             .collect();
         self.inner.checkpoint_revert(checkpoint);
@@ -380,5 +384,32 @@ fn reverted_addresses_from_entry(entry: &JournalEntry) -> Vec<Address> {
         | JournalEntry::CodeChange { address } => vec![*address],
         JournalEntry::BalanceTransfer { from, to, .. } => vec![*from, *to],
         JournalEntry::AccountDestroyed { address, target, .. } => vec![*address, *target],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use revm::{
+        context_interface::journaled_state::JournalCheckpoint, database_interface::EmptyDB,
+    };
+
+    #[test]
+    fn checkpoint_revert_without_entries_is_noop() {
+        let mut journal = MonadJournal::new(EmptyDB::new());
+        let checkpoint = journal.checkpoint();
+
+        journal.checkpoint_revert(checkpoint);
+
+        assert!(journal.journal().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_revert_ignores_out_of_bounds_journal_index() {
+        let mut journal = MonadJournal::new(EmptyDB::new());
+
+        journal.checkpoint_revert(JournalCheckpoint { log_i: 0, journal_i: 4 });
+
+        assert!(journal.journal().is_empty());
     }
 }
