@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/monad-revm/badge.svg)](https://docs.rs/monad-revm)
 [![License](https://img.shields.io/crates/l/monad-revm.svg)](LICENSE)
 
-`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, and full staking precompile support.
+`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, full staking precompile support, and the Monad reserve-balance precompile.
 
 ## EVM Compatibility
 
@@ -159,6 +159,42 @@ Block lifecycle helpers:
 Reader integration path:
 
 - `run_staking_with_reader(...)` supports environments that do not expose full `ContextTr`, and is used by `alloy-monad-evm` integration.
+
+## Reserve Balance Precompile (`0x1001`)
+
+### Activation
+
+- Active on `MonadNine` and above.
+- Exposes reserve-balance state during transaction execution.
+
+### Solidity interface
+
+```solidity
+interface IReserveBalance {
+    function dippedIntoReserve() external returns (bool);
+}
+```
+
+- Selector: `0x3a61584e`
+- Gas: `100`
+
+### Semantics
+
+- Returns `true` when the current transaction state would violate Monad reserve-balance rules if execution ended at that point.
+- Intended for contracts that want to recover, branch, or revert early before transaction end.
+
+### Call restrictions
+
+- Only direct `CALL` is accepted.
+- `STATICCALL`, `DELEGATECALL`, and `CALLCODE` are rejected.
+- Calldata must be exactly the 4-byte selector.
+- Nonzero `msg.value` is rejected.
+
+Error behavior matches the canonical Monad implementation:
+
+- Unknown or short selector: `"method not supported"`
+- Nonzero value: `"value is nonzero"`
+- Extra calldata beyond the selector: `"input is invalid"`
 
 ## Installation
 
