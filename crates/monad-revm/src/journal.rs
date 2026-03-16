@@ -75,7 +75,7 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     #[inline]
-    fn page_warmth_enabled(&self) -> bool {
+    const fn page_warmth_enabled(&self) -> bool {
         MonadSpecId::MonadNext.is_enabled_in(self.monad_spec)
     }
 
