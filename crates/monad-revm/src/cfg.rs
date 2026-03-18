@@ -127,7 +127,7 @@ impl Cfg for MonadCfgEnv {
 
     #[inline]
     fn tx_gas_limit_cap(&self) -> u64 {
-        MONAD_TX_GAS_LIMIT_CAP
+        self.0.tx_gas_limit_cap.unwrap_or(MONAD_TX_GAS_LIMIT_CAP)
     }
 
     #[inline]
@@ -243,5 +243,15 @@ mod tests {
                 "tx_gas_limit_cap should be 30M for {spec:?}, not EIP-7825's 16.7M"
             );
         }
+    }
+
+    #[test]
+    fn test_tx_gas_limit_cap_respects_explicit_override() {
+        let mut cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine);
+        cfg.0.tx_gas_limit_cap = Some(u64::MAX);
+        assert_eq!(cfg.tx_gas_limit_cap(), u64::MAX);
+
+        cfg.0.tx_gas_limit_cap = Some(12_345_678);
+        assert_eq!(cfg.tx_gas_limit_cap(), 12_345_678);
     }
 }
