@@ -11,9 +11,9 @@ use revm::primitives::hardfork::{SpecId, UnknownHardfork};
 #[allow(non_camel_case_types)]
 pub enum MonadSpecId {
     /// Monad launch spec id (based on Prague).
-    #[default]
     MonadEight = 100,
     /// MIP-3, MIP-4, MIP-5
+    #[default]
     MonadNine = 101,
     /// Next development spec
     MonadNext = 102,
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_monad_spec_id_default() {
-        assert_eq!(MonadSpecId::default(), MonadSpecId::MonadEight);
+        assert_eq!(MonadSpecId::default(), MonadSpecId::MonadNine);
     }
 
     #[test]
