@@ -13,9 +13,9 @@ pub enum MonadSpecId {
     /// Monad launch spec id (based on Prague).
     #[default]
     MonadEight = 100,
-    /// MIP-3: Linear memory cost model with 8 MB pooled limit (based on Osaka).
+    /// MIP-3, MIP-4, MIP-5
     MonadNine = 101,
-    /// Next development spec (based on Osaka).
+    /// Next development spec
     MonadNext = 102,
 }
 
@@ -78,7 +78,7 @@ impl From<MonadSpecId> for &'static str {
 pub mod name {
     /// Mainnet launch spec name.
     pub const MONAD_EIGHT: &str = "MonadEight";
-    /// MIP-3 spec name.
+    /// MIP-3, MIP-4 and MIP-5 spec name.
     pub const MONAD_NINE: &str = "MonadNine";
     /// Development spec name.
     pub const MONAD_NEXT: &str = "MonadNext";
