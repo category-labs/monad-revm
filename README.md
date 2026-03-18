@@ -11,7 +11,7 @@
 | Component | Version |
 |-----------|---------|
 | **revm** | v34.0.0 |
-| **Monad spec** | `MONAD_EIGHT` (Prague-compatible baseline) |
+| **Monad spec** | `MONAD_NINE` (Osaka-compatible with Monad-specific exclusions) |
 
 ## What Monad Changes
 
@@ -78,8 +78,6 @@ Pool rewards use an accumulator model:
 - Undelegation creates a `WithdrawalRequest` with an accumulator snapshot.
 - `(epoch, validator)` accumulator snapshots are reference-counted to support delayed withdrawals and epoch-window correctness.
 
-Constants (current `MONAD_EIGHT` implementation):
-
 - `ACTIVE_VALIDATOR_STAKE = 10_000_000 MON`
 - `MIN_AUTH_ADDRESS_STAKE = 100_000 MON`
 - `WITHDRAWAL_DELAY = 1 epoch`
@@ -137,7 +135,6 @@ See implementation constants in `src/staking/constants.rs`.
 
 `monad-revm` tracks C++ staking behavior closely, but there are explicit implementation notes to keep in mind:
 
-- The Rust implementation currently targets `MONAD_EIGHT` constants.
 - `addValidator` currently skips signature verification and uses simplified key-to-address derivation in `write.rs`. This is intentional in the current implementation and should be considered when writing integration tests.
 
 ### How staking is implemented in `monad-revm`
