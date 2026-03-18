@@ -8,6 +8,9 @@ use core::ops::{Deref, DerefMut};
 use revm::context::{Cfg, CfgEnv};
 use revm::context_interface::cfg::GasParams;
 
+/// Monad transaction gas limit cap (30M gas).
+pub const MONAD_TX_GAS_LIMIT_CAP: u64 = 30_000_000;
+
 /// MIP-3: Maximum memory per transaction (8 MB), pooled across the call stack.
 pub const MONAD_MEMORY_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -124,8 +127,7 @@ impl Cfg for MonadCfgEnv {
 
     #[inline]
     fn tx_gas_limit_cap(&self) -> u64 {
-        // Delegate to inner - Monad doesn't change this
-        <CfgEnv<MonadSpecId> as Cfg>::tx_gas_limit_cap(&self.0)
+        MONAD_TX_GAS_LIMIT_CAP
     }
 
     #[inline]
@@ -227,5 +229,19 @@ mod tests {
 
         // Should now use Monad defaults
         assert_eq!(monad_cfg.max_code_size(), MONAD_MAX_CODE_SIZE);
+    }
+
+    #[test]
+    fn test_tx_gas_limit_cap_is_monad_cap() {
+        // Monad uses a 30M tx gas limit, not EIP-7825's 16.7M.
+        // This must hold for all specs, including MonadNine which maps to OSAKA.
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let cfg = MonadCfgEnv::new_with_spec(spec);
+            assert_eq!(
+                cfg.tx_gas_limit_cap(),
+                MONAD_TX_GAS_LIMIT_CAP,
+                "tx_gas_limit_cap should be 30M for {spec:?}, not EIP-7825's 16.7M"
+            );
+        }
     }
 }
