@@ -660,8 +660,8 @@ mod tests {
     #[test]
     fn test_modexp_gas_increases_on_monad_nine() {
         let input = modexp_input(
-            &vec![0xff; 32],
-            &vec![0xff; 32],
+            &[0xff; 32],
+            &[0xff; 32],
             &hex::decode("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd")
                 .expect("valid modulus hex"),
         );
