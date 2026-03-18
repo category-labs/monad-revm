@@ -132,7 +132,21 @@ pub const WARM_STORAGE_READ_COST: u64 = 100;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        api::{builder::MonadBuilder, default_ctx::monad_context_with_db},
+        MonadCfgEnv,
+    };
     use revm::primitives::hardfork::SpecId;
+    use revm::{
+        bytecode::opcode,
+        context::TxEnv,
+        context_interface::result::{ExecutionResult, HaltReason},
+        database::InMemoryDB,
+        handler::EvmTr,
+        primitives::{Address, Bytes, TxKind, U256},
+        state::{AccountInfo, Bytecode},
+        ExecuteEvm,
+    };
 
     #[test]
     fn test_monad_gas_params_cold_storage_cost() {
@@ -176,5 +190,67 @@ mod tests {
         // Monad cold account additional: 10000 vs Ethereum: 2500
         assert_eq!(monad.get(GasId::cold_account_additional_cost()), 10000);
         assert_eq!(eth.get(GasId::cold_account_additional_cost()), 2500);
+    }
+
+    fn run_contract(spec: MonadSpecId, code: Vec<u8>) -> ExecutionResult<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let contract = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(code))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let mut evm = ctx.build_monad();
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(contract))
+            .gas_limit(100_000)
+            .gas_price(0)
+            .build_fill();
+
+        evm.transact(tx).expect("contract call should execute").result
+    }
+
+    #[test]
+    fn test_clz_is_only_available_on_monad_nine() {
+        let clz_contract = vec![
+            opcode::PUSH1,
+            0x01,
+            opcode::CLZ,
+            opcode::PUSH1,
+            0x00,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH1,
+            0x00,
+            opcode::RETURN,
+        ];
+
+        let monad_eight_result = run_contract(MonadSpecId::MonadEight, clz_contract.clone());
+        assert!(
+            matches!(
+                monad_eight_result,
+                ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+            ),
+            "CLZ should be unavailable before MonadNine, got {monad_eight_result:?}"
+        );
+
+        let monad_nine_result = run_contract(MonadSpecId::MonadNine, clz_contract);
+        let output = monad_nine_result.output().expect("CLZ should return data on MonadNine");
+        assert_eq!(
+            U256::from_be_slice(output.as_ref()),
+            U256::from(255),
+            "CLZ(1) should return 255 on MonadNine"
+        );
     }
 }

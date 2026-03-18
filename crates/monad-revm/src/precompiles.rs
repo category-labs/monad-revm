@@ -324,6 +324,26 @@ impl Default for MonadPrecompiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use revm::precompile::{self, PrecompileError};
+    use revm::primitives::{hex, U256};
+
+    fn modexp_input(base: &[u8], exponent: &[u8], modulus: &[u8]) -> Vec<u8> {
+        let mut input = Vec::with_capacity(96 + base.len() + exponent.len() + modulus.len());
+        input.extend_from_slice(&U256::from(base.len()).to_be_bytes::<32>());
+        input.extend_from_slice(&U256::from(exponent.len()).to_be_bytes::<32>());
+        input.extend_from_slice(&U256::from(modulus.len()).to_be_bytes::<32>());
+        input.extend_from_slice(base);
+        input.extend_from_slice(exponent);
+        input.extend_from_slice(modulus);
+        input
+    }
+
+    fn modexp_precompile(spec: MonadSpecId) -> &'static Precompile {
+        MonadPrecompiles::new_with_spec(spec)
+            .precompiles()
+            .get(&precompile::u64_to_address(0x05))
+            .expect("modexp (0x05) should exist")
+    }
 
     #[test]
     fn test_monad_precompile_gas_costs() {
@@ -615,6 +635,53 @@ mod tests {
             result.gas_used,
             revm::precompile::secp256r1::P256VERIFY_BASE_GAS_FEE,
             "P256VERIFY should use Ethereum gas cost of 3450"
+        );
+    }
+
+    #[test]
+    fn test_modexp_size_limit_is_enabled_on_monad_nine() {
+        let oversized_input = modexp_input(&vec![0u8; 1025], &[0x01], &[0x01]);
+
+        let monad_eight_result =
+            modexp_precompile(MonadSpecId::MonadEight).execute(&oversized_input, 100_000_000);
+        assert!(
+            monad_eight_result.is_ok(),
+            "MonadEight should not apply the Osaka MODEXP size limit"
+        );
+
+        let monad_nine_result =
+            modexp_precompile(MonadSpecId::MonadNine).execute(&oversized_input, 100_000_000);
+        assert!(
+            matches!(monad_nine_result, Err(PrecompileError::ModexpEip7823LimitSize)),
+            "MonadNine should reject oversized MODEXP input, got {monad_nine_result:?}"
+        );
+    }
+
+    #[test]
+    fn test_modexp_gas_increases_on_monad_nine() {
+        let input = modexp_input(
+            &vec![0xff; 32],
+            &vec![0xff; 32],
+            &hex::decode("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd")
+                .expect("valid modulus hex"),
+        );
+
+        let monad_eight_result = modexp_precompile(MonadSpecId::MonadEight)
+            .execute(&input, 10_000_000)
+            .expect("MonadEight MODEXP should succeed");
+        let monad_nine_result = modexp_precompile(MonadSpecId::MonadNine)
+            .execute(&input, 10_000_000)
+            .expect("MonadNine MODEXP should succeed");
+
+        assert_eq!(
+            monad_eight_result.bytes, monad_nine_result.bytes,
+            "MODEXP output should stay the same across MonadEight and MonadNine"
+        );
+        assert!(
+            monad_nine_result.gas_used > monad_eight_result.gas_used,
+            "MonadNine MODEXP gas should increase: MonadEight={}, MonadNine={}",
+            monad_eight_result.gas_used,
+            monad_nine_result.gas_used
         );
     }
 }
