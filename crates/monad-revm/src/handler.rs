@@ -101,6 +101,8 @@ where
     }
 
     fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
+        let monad_spec = evm.ctx().cfg().spec();
+        evm.ctx().journal_mut().set_monad_spec(monad_spec);
         self.validate_against_state_and_deduct_caller(evm)?;
         self.load_accounts(evm)?;
         let gas = self.apply_eip7702_auth_list(evm)?;

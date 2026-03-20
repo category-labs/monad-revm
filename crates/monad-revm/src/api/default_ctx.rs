@@ -1,6 +1,6 @@
 // Default Monad context type and factory.
 
-use crate::{MonadCfgEnv, MonadChainContext, MonadJournal, MonadSpecId};
+use crate::{MonadCfgEnv, MonadChainContext, MonadJournal, MonadJournalTr, MonadSpecId};
 use revm::{
     context::{BlockEnv, LocalContext, TxEnv},
     context_interface::JournalTr,
@@ -26,6 +26,7 @@ pub trait DefaultMonad {
 /// Creates a Monad context with the given database backend.
 pub fn monad_context_with_db<DB: Database>(db: DB) -> MonadContext<DB> {
     let mut journaled_state = MonadJournal::new(db);
+    journaled_state.set_monad_spec(MonadSpecId::default());
     journaled_state.set_spec_id(MonadSpecId::default().into());
     Context {
         block: BlockEnv::default(),

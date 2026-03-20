@@ -22,6 +22,8 @@ pub mod instructions;
 pub mod journal;
 /// MIP-3: Linear memory cost model with 8 MB pooled limit.
 pub mod memory;
+/// Helpers for paged storage demo semantics.
+pub mod page;
 /// Monad precompiles with custom gas pricing.
 pub mod precompiles;
 /// Monad reserve-balance precompile (0x1001).
