@@ -204,7 +204,7 @@ pub const MONAD_EC_PAIRING: Precompile = Precompile::new(
 pub const MONAD_BLAKE2F: Precompile =
     Precompile::new(PrecompileId::Blake2F, revm::precompile::u64_to_address(9), monad_blake2f_run);
 
-/// Monad KZG point evaluation precompile (address 0x0a, 50000 gas)
+/// Monad KZG point evaluation precompile (address 0x0a, 50,000 gas)
 pub const MONAD_POINT_EVALUATION: Precompile = Precompile::new(
     PrecompileId::KzgPointEvaluation,
     revm::precompile::u64_to_address(0x0A),
