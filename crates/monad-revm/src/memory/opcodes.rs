@@ -355,17 +355,18 @@ pub fn log<const N: usize, H: Host + ?Sized>(
 /// is happening on behalf of a delegated account, including nested delegate chains.
 fn target_is_delegated_account<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: &mut InstructionContext<'_, H, WIRE>,
-) -> bool {
+) -> Result<bool, LoadError> {
     let target = context.interpreter.input.target_address();
     context
         .host
         .load_account_info_skip_cold_load(target, true, false)
-        .ok()
-        .and_then(|account| account.code.as_ref().map(Bytecode::is_eip7702))
-        .unwrap_or(false)
+        .map(|account| account.code.as_ref().map(Bytecode::is_eip7702).unwrap_or(false))
 }
 
-/// CREATE/CREATE2 with MIP-3 linear memory cost.
+/// CREATE/CREATE2 with spec-dependent memory expansion cost.
+///
+/// MonadNine+ uses MIP-3 linear memory cost, while earlier Monad specs keep the
+/// standard revm memory expansion behavior.
 pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
 ) {
@@ -373,9 +374,20 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
     if IS_CREATE2 {
         revm_interpreter::check!(context.interpreter, PETERSBURG);
     }
-    if target_is_delegated_account(&mut context) {
-        context.interpreter.halt(InstructionResult::NotActivated);
-        return;
+    match target_is_delegated_account(&mut context) {
+        Ok(true) => {
+            context.interpreter.halt(InstructionResult::NotActivated);
+            return;
+        }
+        Ok(false) => {}
+        Err(LoadError::ColdLoadSkipped) => {
+            context.interpreter.halt_oog();
+            return;
+        }
+        Err(LoadError::DBError) => {
+            context.interpreter.halt_fatal();
+            return;
+        }
     }
 
     revm_interpreter::popn!([value, code_offset, len], context.interpreter);
