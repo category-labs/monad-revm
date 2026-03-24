@@ -48,17 +48,23 @@ pub fn monad_gas_params(spec: MonadSpecId) -> GasParams {
 
 /// Create Monad instructions table with custom gas costs.
 ///
-/// For MonadNine+ (MIP-3), all memory-expanding opcodes are replaced with
-/// Monad-local handlers that use the linear cost model (`words / 2`).
+/// For all supported Monad specs, CREATE/CREATE2 use Monad-local handlers so
+/// delegated accounts cannot create contracts. MonadNine+ additionally replaces
+/// memory-expanding opcodes with linear-cost MIP-3 handlers (`words / 2`).
 pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
     let mut instructions =
         EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec);
 
+    // All supported Monad specs forbid CREATE/CREATE2 while executing on behalf of
+    // an EIP-7702 delegated account.
+    use crate::memory::opcodes;
+    use revm::bytecode::opcode::*;
+    instructions.insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
+    instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
+
     // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
     if MonadSpecId::MonadNine.is_enabled_in(spec) {
-        use crate::memory::opcodes;
-        use revm::bytecode::opcode::*;
         use revm::interpreter::instructions::gas;
 
         // Memory opcodes
@@ -87,12 +93,6 @@ pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX
         instructions.insert_instruction(LOG2, Instruction::new(opcodes::log::<2, _>, gas::LOG));
         instructions.insert_instruction(LOG3, Instruction::new(opcodes::log::<3, _>, gas::LOG));
         instructions.insert_instruction(LOG4, Instruction::new(opcodes::log::<4, _>, gas::LOG));
-
-        // Create opcodes
-        instructions
-            .insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
-        instructions
-            .insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
 
         // Call opcodes
         instructions
@@ -224,6 +224,44 @@ mod tests {
         evm.transact(tx).expect("contract call should execute").result
     }
 
+    fn run_delegated_contract(
+        spec: MonadSpecId,
+        target_code: Bytecode,
+        delegated_address: Address,
+        delegated_code: Vec<u8>,
+        extra_accounts: &[(Address, Bytecode)],
+    ) -> ExecutionResult<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let target = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(target, AccountInfo::default().with_code(target_code));
+        db.insert_account_info(
+            delegated_address,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(delegated_code))),
+        );
+        for (address, code) in extra_accounts {
+            db.insert_account_info(*address, AccountInfo::default().with_code(code.clone()));
+        }
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let mut evm = ctx.build_monad();
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(target))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+
+        evm.transact(tx).expect("delegated contract call should execute").result
+    }
+
     #[test]
     fn test_clz_is_only_available_on_monad_nine() {
         let clz_contract = vec![
@@ -303,5 +341,84 @@ mod tests {
                 "jumpdest after 0xE6 should remain reachable on {spec:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_create_is_rejected_for_delegated_accounts() {
+        let delegated_address = Address::from([0x33; 20]);
+        let delegated_code = vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE];
+
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_delegated_contract(
+                spec,
+                Bytecode::new_eip7702(delegated_address),
+                delegated_address,
+                delegated_code.clone(),
+                &[],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Halt { .. }),
+                "CREATE should halt for delegated accounts on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_create2_is_rejected_inside_nested_delegated_execution() {
+        let delegated_address = Address::from([0x33; 20]);
+        let creator = Address::from([0x44; 20]);
+
+        let mut delegated_code = vec![
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH20,
+        ];
+        delegated_code.extend_from_slice(creator.as_slice());
+        delegated_code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::DELEGATECALL,
+            opcode::PUSH1,
+            0x1f,
+            opcode::JUMPI,
+            opcode::INVALID,
+            opcode::JUMPDEST,
+        ]);
+
+        let creator_code =
+            Bytecode::new_raw(Bytes::from(vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE2]));
+
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_delegated_contract(
+                spec,
+                Bytecode::new_eip7702(delegated_address),
+                delegated_address,
+                delegated_code.clone(),
+                &[(creator, creator_code.clone())],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Halt { .. }),
+                "CREATE2 should halt for nested delegated execution on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_still_succeeds_for_regular_contracts() {
+        let result = run_contract(
+            MonadSpecId::MonadNine,
+            vec![
+                opcode::PUSH0,
+                opcode::PUSH0,
+                opcode::PUSH0,
+                opcode::CREATE,
+                opcode::STOP,
+            ],
+        );
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "regular CREATE should still succeed, got {result:?}"
+        );
     }
 }

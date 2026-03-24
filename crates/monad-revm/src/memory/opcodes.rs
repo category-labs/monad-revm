@@ -20,6 +20,7 @@ use revm::{
     context_interface::{cfg::GasParams, host::LoadError, CreateScheme, Host},
     interpreter::interpreter_action::FrameInput,
     primitives::{self, hardfork::SpecId, Address, Bytes, B256, KECCAK_EMPTY, U256},
+    state::Bytecode,
 };
 use std::boxed::Box;
 
@@ -348,13 +349,33 @@ pub fn log<const N: usize, H: Host + ?Sized>(
 // CREATE / CREATE2
 // ---------------------------------------------------------------------------
 
+/// Returns true when the current storage context is an EIP-7702 delegation designator.
+///
+/// Monad matches the C++ client here: contract creation is rejected when execution
+/// is happening on behalf of a delegated account, including nested delegate chains.
+fn target_is_delegated_account<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: &mut InstructionContext<'_, H, WIRE>,
+) -> bool {
+    let target = context.interpreter.input.target_address();
+    context
+        .host
+        .load_account_info_skip_cold_load(target, true, false)
+        .ok()
+        .and_then(|account| account.code.as_ref().map(Bytecode::is_eip7702))
+        .unwrap_or(false)
+}
+
 /// CREATE/CREATE2 with MIP-3 linear memory cost.
 pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
-    context: InstructionContext<'_, H, WIRE>,
+    mut context: InstructionContext<'_, H, WIRE>,
 ) {
     revm_interpreter::require_non_staticcall!(context.interpreter);
     if IS_CREATE2 {
         revm_interpreter::check!(context.interpreter, PETERSBURG);
+    }
+    if target_is_delegated_account(&mut context) {
+        context.interpreter.halt(InstructionResult::NotActivated);
+        return;
     }
 
     revm_interpreter::popn!([value, code_offset, len], context.interpreter);
@@ -374,7 +395,16 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
         }
 
         let code_offset = revm_interpreter::as_usize_or_fail!(context.interpreter, code_offset);
-        resize_memory_mip3!(context.interpreter, code_offset, len);
+        if context.interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::OSAKA) {
+            resize_memory_mip3!(context.interpreter, code_offset, len);
+        } else {
+            revm_interpreter::resize_memory!(
+                context.interpreter,
+                context.host.gas_params(),
+                code_offset,
+                len
+            );
+        }
 
         code =
             Bytes::copy_from_slice(context.interpreter.memory.slice_len(code_offset, len).as_ref());
