@@ -368,13 +368,8 @@ mod tests {
         let delegated_address = Address::from([0x33; 20]);
         let creator = Address::from([0x44; 20]);
 
-        let mut delegated_code = vec![
-            opcode::PUSH0,
-            opcode::PUSH0,
-            opcode::PUSH0,
-            opcode::PUSH0,
-            opcode::PUSH20,
-        ];
+        let mut delegated_code =
+            vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH20];
         delegated_code.extend_from_slice(creator.as_slice());
         delegated_code.extend_from_slice(&[
             opcode::GAS,
@@ -386,8 +381,13 @@ mod tests {
             opcode::JUMPDEST,
         ]);
 
-        let creator_code =
-            Bytecode::new_raw(Bytes::from(vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE2]));
+        let creator_code = Bytecode::new_raw(Bytes::from(vec![
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::CREATE2,
+        ]));
 
         for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
             let result = run_delegated_contract(
@@ -408,13 +408,7 @@ mod tests {
     fn test_create_still_succeeds_for_regular_contracts() {
         let result = run_contract(
             MonadSpecId::MonadNine,
-            vec![
-                opcode::PUSH0,
-                opcode::PUSH0,
-                opcode::PUSH0,
-                opcode::CREATE,
-                opcode::STOP,
-            ],
+            vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE, opcode::STOP],
         );
         assert!(
             matches!(result, ExecutionResult::Success { .. }),
