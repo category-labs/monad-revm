@@ -62,7 +62,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
     if inputs.scheme != CallScheme::Call || inputs.is_static {
         return Ok(Some(InterpreterResult {
             result: InstructionResult::Revert,
-            gas: Gas::new(inputs.gas_limit),
+            gas: Gas::new_spent(inputs.gas_limit),
             output: Bytes::new(),
         }));
     }
@@ -1459,6 +1459,8 @@ mod tests {
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.gas.remaining(), 0);
+        assert_eq!(result.gas.spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1469,6 +1471,8 @@ mod tests {
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.gas.remaining(), 0);
+        assert_eq!(result.gas.spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1479,6 +1483,8 @@ mod tests {
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.gas.remaining(), 0);
+        assert_eq!(result.gas.spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1492,6 +1498,8 @@ mod tests {
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
+        assert_eq!(result.gas.remaining(), 0);
+        assert_eq!(result.gas.spent(), inputs.gas_limit);
     }
 
     #[test]
