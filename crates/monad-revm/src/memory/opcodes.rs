@@ -7,7 +7,7 @@
 use super::resize_memory_mip3;
 use core::cmp::max;
 use revm::interpreter::{
-    instructions::contract::load_acc_and_calc_gas,
+    instructions::contract::{get_memory_input_and_out_ranges, load_acc_and_calc_gas},
     interpreter::Interpreter,
     interpreter_types::{
         InputsTr, InterpreterTypes, LegacyBytecode, LoopControl, MemoryTr, ReturnData, RuntimeFlag,
@@ -103,6 +103,19 @@ fn monad_get_memory_input_and_out_ranges(
     Some((in_range, ret_range))
 }
 
+/// Memory input/output ranges for CALL instructions using the correct Monad memory model.
+#[inline]
+fn call_memory_input_and_out_ranges(
+    interpreter: &mut Interpreter<impl InterpreterTypes>,
+    gas_params: &GasParams,
+) -> Option<(core::ops::Range<usize>, core::ops::Range<usize>)> {
+    if interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::OSAKA) {
+        monad_get_memory_input_and_out_ranges(interpreter, gas_params)
+    } else {
+        get_memory_input_and_out_ranges(interpreter, gas_params)
+    }
+}
+
 /// Resize memory for CALL arguments and return range using MIP-3 linear cost.
 ///
 /// Mirrors [`revm::interpreter::instructions::contract::resize_memory`].
@@ -121,6 +134,37 @@ fn monad_call_resize_memory(
         usize::MAX
     };
     Some(offset..offset + len)
+}
+
+/// Resolves the address of the bytecode that will execute for a CALL-like opcode.
+///
+/// For EIP-7702 accounts this is the delegated target address rather than the
+/// storage-bearing account that was originally called.
+#[inline]
+fn resolved_call_bytecode_address<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: &mut InstructionContext<'_, H, WIRE>,
+    to: Address,
+) -> Option<Address> {
+    match context.host.load_account_info_skip_cold_load(to, true, false) {
+        Ok(account) => Some(
+            account
+                .code
+                .as_ref()
+                .and_then(|code| match code {
+                    Bytecode::Eip7702(code) => Some(code.address()),
+                    _ => None,
+                })
+                .unwrap_or(to),
+        ),
+        Err(LoadError::ColdLoadSkipped) => {
+            context.interpreter.halt_oog();
+            None
+        }
+        Err(LoadError::DBError) => {
+            context.interpreter.halt_fatal();
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -467,7 +511,7 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     }
 
     let Some((input, return_memory_offset)) =
-        monad_get_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
     else {
         return;
     };
@@ -477,6 +521,9 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     else {
         return;
     };
+    let Some(bytecode_address) = resolved_call_bytecode_address(&mut context, to) else {
+        return;
+    };
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -484,7 +531,7 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: to,
             caller: context.interpreter.input.target_address(),
-            bytecode_address: to,
+            bytecode_address,
             known_bytecode: Some((bytecode_hash, bytecode)),
             value: CallValue::Transfer(value),
             scheme: CallScheme::Call,
@@ -504,7 +551,7 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let has_transfer = !value.is_zero();
 
     let Some((input, return_memory_offset)) =
-        monad_get_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
     else {
         return;
     };
@@ -514,6 +561,9 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
     else {
         return;
     };
+    let Some(bytecode_address) = resolved_call_bytecode_address(&mut context, to) else {
+        return;
+    };
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -521,7 +571,7 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.target_address(),
-            bytecode_address: to,
+            bytecode_address,
             known_bytecode: Some((bytecode_hash, bytecode)),
             value: CallValue::Transfer(value),
             scheme: CallScheme::CallCode,
@@ -541,7 +591,7 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
 
     let Some((input, return_memory_offset)) =
-        monad_get_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
     else {
         return;
     };
@@ -551,6 +601,9 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     else {
         return;
     };
+    let Some(bytecode_address) = resolved_call_bytecode_address(&mut context, to) else {
+        return;
+    };
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -558,7 +611,7 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.caller_address(),
-            bytecode_address: to,
+            bytecode_address,
             known_bytecode: Some((bytecode_hash, bytecode)),
             value: CallValue::Apparent(context.interpreter.input.call_value()),
             scheme: CallScheme::DelegateCall,
@@ -578,7 +631,7 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
 
     let Some((input, return_memory_offset)) =
-        monad_get_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
     else {
         return;
     };
@@ -588,6 +641,9 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     else {
         return;
     };
+    let Some(bytecode_address) = resolved_call_bytecode_address(&mut context, to) else {
+        return;
+    };
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -595,7 +651,7 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: to,
             caller: context.interpreter.input.target_address(),
-            bytecode_address: to,
+            bytecode_address,
             known_bytecode: Some((bytecode_hash, bytecode)),
             value: CallValue::Transfer(U256::ZERO),
             scheme: CallScheme::StaticCall,

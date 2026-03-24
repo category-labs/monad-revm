@@ -9,15 +9,19 @@ use revm::{
         journaled_state::account::JournaledAccountTr,
         result::{HaltReason, InvalidTransaction},
         transaction::{AuthorizationTr, TransactionType},
-        Block, Cfg, ContextTr, Database, JournalTr, Transaction,
+        Block, Cfg, ContextTr, Database, JournalTr, LocalContextTr, Transaction,
     },
     handler::{
         evm::FrameTr, handler::EvmTrError, pre_execution, validation, EthFrame, EvmTr, FrameResult,
         Handler, MainnetHandler,
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
-    interpreter::{interpreter::EthInterpreter, interpreter_action::FrameInit},
-    primitives::{hardfork::SpecId, U256},
+    interpreter::{
+        interpreter::EthInterpreter, interpreter_action::FrameInit, CallInput, CallInputs,
+        CallScheme, CallValue, FrameInput, SharedMemory,
+    },
+    primitives::{hardfork::SpecId, TxKind, U256},
+    state::Bytecode,
 };
 
 use crate::chain::MonadChainContext;
@@ -215,6 +219,63 @@ where
         ctx.journal_mut().balance_incr(beneficiary, U256::from(reward))?;
 
         Ok(())
+    }
+
+    fn first_frame_input(
+        &mut self,
+        evm: &mut Self::Evm,
+        gas_limit: u64,
+    ) -> Result<FrameInit, Self::Error> {
+        let ctx = evm.ctx_mut();
+        let mut memory = SharedMemory::new_with_buffer(ctx.local().shared_memory_buffer().clone());
+        memory.set_memory_limit(ctx.cfg().memory_limit());
+
+        let (tx, journal) = ctx.tx_journal_mut();
+        let (bytecode, bytecode_address) = if let Some(&to) = tx.kind().to() {
+            let account = &journal.load_account_with_code(to)?.info;
+            if let Some(delegated_address) = account.code.as_ref().and_then(|code| match code {
+                Bytecode::Eip7702(code) => Some(code.address()),
+                _ => None,
+            }) {
+                let delegated_account = &journal.load_account_with_code(delegated_address)?.info;
+                (
+                    Some((
+                        delegated_account.code.clone().unwrap_or_default(),
+                        delegated_account.code_hash(),
+                    )),
+                    Some(delegated_address),
+                )
+            } else {
+                (Some((account.code.clone().unwrap_or_default(), account.code_hash())), Some(to))
+            }
+        } else {
+            (None, None)
+        };
+
+        let input = tx.input().clone();
+        let frame_input = match tx.kind() {
+            TxKind::Call(target_address) => FrameInput::Call(Box::new(CallInputs {
+                input: CallInput::Bytes(input),
+                gas_limit,
+                target_address,
+                bytecode_address: bytecode_address.unwrap_or(target_address),
+                known_bytecode: bytecode.map(|(code, hash)| (hash, code)),
+                caller: tx.caller(),
+                value: CallValue::Transfer(tx.value()),
+                scheme: CallScheme::Call,
+                is_static: false,
+                return_memory_offset: 0..0,
+            })),
+            TxKind::Create => FrameInput::Create(Box::new(revm::interpreter::CreateInputs::new(
+                tx.caller(),
+                revm::context_interface::CreateScheme::Create,
+                tx.value(),
+                input,
+                gas_limit,
+            ))),
+        };
+
+        Ok(FrameInit { depth: 0, memory, frame_input })
     }
 }
 
