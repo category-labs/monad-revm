@@ -34,7 +34,7 @@ Monad uses a different cold-access model and no gas refunds.
 | `ecMul` | `0x07` | 6,000 | 30,000 | 5x |
 | `ecPairing` | `0x08` | 45,000 + 34,000/pt | 225,000 + 170,000/pt | 5x |
 | `blake2f` | `0x09` | rounds × 1 | rounds × 2 | 2x |
-| KZG point evaluation | `0x0a` | 50,000 | 200,000 | 4x |
+| KZG point evaluation | `0x0a` | 50,000 | 50,000 | 1x |
 
 ### Bytecode and transaction rules
 

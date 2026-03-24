@@ -10,7 +10,7 @@
 //! | ecMul       | 0x07    | 6,000    | 30,000  | 5x         |
 //! | ecPairing   | 0x08    | 45,000*  | 225,000*| 5x         |
 //! | blake2f     | 0x09    | rounds×1 | rounds×2| 2x         |
-//! | point eval  | 0x0a    | 50,000   | 200,000 | 4x         |
+//! | point eval  | 0x0a    | 50,000   | 50,000  | 1x         |
 //! | staking     | 0x1000  | N/A      | varies  | Monad-only |
 //!
 //! *Base cost per operation
@@ -50,8 +50,8 @@ pub const MONAD_EC_PAIRING_PER_POINT_GAS: u64 = 170_000;
 /// Monad blake2f gas multiplier (2x Ethereum's 1)
 pub const MONAD_BLAKE2F_ROUND_GAS: u64 = 2;
 
-/// Monad KZG point evaluation gas cost (4x Ethereum's 50000)
-pub const MONAD_POINT_EVALUATION_GAS: u64 = 200_000;
+/// Monad KZG point evaluation gas cost.
+pub const MONAD_POINT_EVALUATION_GAS: u64 = 50_000;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Monad Precompile Run Functions
@@ -204,7 +204,7 @@ pub const MONAD_EC_PAIRING: Precompile = Precompile::new(
 pub const MONAD_BLAKE2F: Precompile =
     Precompile::new(PrecompileId::Blake2F, revm::precompile::u64_to_address(9), monad_blake2f_run);
 
-/// Monad KZG point evaluation precompile (address 0x0a, 200000 gas)
+/// Monad KZG point evaluation precompile (address 0x0a, 50000 gas)
 pub const MONAD_POINT_EVALUATION: Precompile = Precompile::new(
     PrecompileId::KzgPointEvaluation,
     revm::precompile::u64_to_address(0x0A),
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(MONAD_EC_PAIRING_BASE_GAS, 225_000);
         assert_eq!(MONAD_EC_PAIRING_PER_POINT_GAS, 170_000);
         assert_eq!(MONAD_BLAKE2F_ROUND_GAS, 2);
-        assert_eq!(MONAD_POINT_EVALUATION_GAS, 200_000);
+        assert_eq!(MONAD_POINT_EVALUATION_GAS, 50_000);
     }
 
     #[test]
@@ -450,6 +450,18 @@ mod tests {
             revm::precompile::u64_to_address(0x1000),
             "staking address should be 0x1000"
         );
+    }
+
+    #[test]
+    fn test_monad_point_evaluation_precompile_gas_threshold() {
+        assert!(matches!(
+            monad_point_evaluation_run(&[], MONAD_POINT_EVALUATION_GAS - 1),
+            Err(PrecompileError::OutOfGas)
+        ));
+        assert!(matches!(
+            monad_point_evaluation_run(&[], MONAD_POINT_EVALUATION_GAS),
+            Err(PrecompileError::BlobInvalidInputLength)
+        ));
     }
 
     #[test]
