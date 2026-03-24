@@ -148,6 +148,10 @@ mod tests {
         ExecuteEvm,
     };
 
+    const DUPN_OPCODE: u8 = 0xE6;
+    const SWAPN_OPCODE: u8 = 0xE7;
+    const EXCHANGE_OPCODE: u8 = 0xE8;
+
     #[test]
     fn test_monad_gas_params_cold_storage_cost() {
         let params = monad_gas_params(MonadSpecId::MonadEight);
@@ -252,5 +256,52 @@ mod tests {
             U256::from(255),
             "CLZ(1) should return 255 on MonadNine"
         );
+    }
+
+    #[test]
+    fn test_extended_stack_opcode_bytes_are_unknown_on_monad_nine_and_next() {
+        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            for opcode in [DUPN_OPCODE, SWAPN_OPCODE, EXCHANGE_OPCODE] {
+                let result = run_contract(spec, vec![opcode]);
+                assert!(
+                    matches!(
+                        result,
+                        ExecutionResult::Halt { reason: HaltReason::OpcodeNotFound, .. }
+                    ),
+                    "opcode 0x{opcode:02x} should be unavailable on {spec:?}, got {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_jumpdest_after_unknown_extended_stack_opcode_byte_is_reachable() {
+        let contract = vec![
+            opcode::PUSH1,
+            0x04,
+            opcode::JUMP,
+            DUPN_OPCODE,
+            opcode::JUMPDEST,
+            opcode::PUSH1,
+            0x2a,
+            opcode::PUSH1,
+            0x00,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH1,
+            0x00,
+            opcode::RETURN,
+        ];
+
+        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_contract(spec, contract.clone());
+            let output = result.output().expect("jump target should execute successfully");
+            assert_eq!(
+                U256::from_be_slice(output.as_ref()),
+                U256::from(42),
+                "jumpdest after 0xE6 should remain reachable on {spec:?}"
+            );
+        }
     }
 }
