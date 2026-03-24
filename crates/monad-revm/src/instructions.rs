@@ -62,6 +62,17 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
     use revm::bytecode::opcode::*;
     instructions.insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
     instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
+    instructions.insert_instruction(CALL, Instruction::new(opcodes::call, WARM_STORAGE_READ_COST));
+    instructions
+        .insert_instruction(CALLCODE, Instruction::new(opcodes::call_code, WARM_STORAGE_READ_COST));
+    instructions.insert_instruction(
+        DELEGATECALL,
+        Instruction::new(opcodes::delegate_call, WARM_STORAGE_READ_COST),
+    );
+    instructions.insert_instruction(
+        STATICCALL,
+        Instruction::new(opcodes::static_call, WARM_STORAGE_READ_COST),
+    );
 
     // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
     if MonadHardfork::MonadNine.is_enabled_in(spec) {
@@ -94,22 +105,6 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
         instructions.insert_instruction(LOG3, Instruction::new(opcodes::log::<3, _>, gas::LOG));
         instructions.insert_instruction(LOG4, Instruction::new(opcodes::log::<4, _>, gas::LOG));
 
-        // Call opcodes
-        instructions
-            .insert_instruction(CALL, Instruction::new(opcodes::call, gas::WARM_STORAGE_READ_COST));
-        instructions.insert_instruction(
-            CALLCODE,
-            Instruction::new(opcodes::call_code, gas::WARM_STORAGE_READ_COST),
-        );
-        instructions.insert_instruction(
-            DELEGATECALL,
-            Instruction::new(opcodes::delegate_call, gas::WARM_STORAGE_READ_COST),
-        );
-        instructions.insert_instruction(
-            STATICCALL,
-            Instruction::new(opcodes::static_call, gas::WARM_STORAGE_READ_COST),
-        );
-
         // Return opcodes
         instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret, 0));
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert, 0));
@@ -134,8 +129,13 @@ mod tests {
     use super::*;
     use crate::{
         api::{builder::MonadBuilder, default_ctx::monad_context_with_db},
+        reserve_balance::{
+            abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
+        },
+        staking::{interface::IMonadStaking::getEpochCall, storage::STAKING_ADDRESS},
         MonadCfgEnv,
     };
+    use alloy_sol_types::SolCall;
     use revm::primitives::hardfork::SpecId;
     use revm::{
         bytecode::opcode,
@@ -260,6 +260,162 @@ mod tests {
             .build_fill();
 
         evm.transact(tx).expect("delegated contract call should execute").result
+    }
+
+    fn run_contract_with_input_and_accounts(
+        spec: MonadHardfork,
+        target_code: Bytecode,
+        input: Bytes,
+        extra_accounts: &[(Address, Bytecode)],
+    ) -> ExecutionResult<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let target = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(target, AccountInfo::default().with_code(target_code));
+        for (address, code) in extra_accounts {
+            db.insert_account_info(*address, AccountInfo::default().with_code(code.clone()));
+        }
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let mut evm = ctx.build_monad();
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(target))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .data(input)
+            .build_fill();
+
+        evm.transact(tx).expect("contract call should execute").result
+    }
+
+    fn call_returns_success_flag_contract(target: Address, selector: [u8; 4]) -> Vec<u8> {
+        let mut code = vec![opcode::PUSH4];
+        code.extend_from_slice(&selector);
+        code.extend_from_slice(&[
+            opcode::PUSH1,
+            0x1c,
+            opcode::MSTORE,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH1,
+            0x04,
+            opcode::PUSH1,
+            0x1c,
+            opcode::PUSH0,
+            opcode::PUSH20,
+        ]);
+        code.extend_from_slice(target.as_slice());
+        code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::CALL,
+            opcode::PUSH0,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::RETURN,
+        ]);
+        code
+    }
+
+    fn push2(code: &mut Vec<u8>, value: u16) {
+        code.push(opcode::PUSH2);
+        code.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn memory_expanding_call_contract(
+        opcode: u8,
+        target: Address,
+        input_len: u16,
+        output_len: u16,
+    ) -> Vec<u8> {
+        let mut code = Vec::new();
+        push2(&mut code, output_len);
+        push2(&mut code, 0x2000);
+        push2(&mut code, input_len);
+        push2(&mut code, 0x1000);
+
+        match opcode {
+            opcode::CALL | opcode::CALLCODE => {
+                code.push(opcode::PUSH0); // value
+                code.push(opcode::PUSH20);
+                code.extend_from_slice(target.as_slice());
+                code.push(opcode::GAS);
+                code.push(opcode);
+            }
+            opcode::DELEGATECALL | opcode::STATICCALL => {
+                code.push(opcode::PUSH20);
+                code.extend_from_slice(target.as_slice());
+                code.push(opcode::GAS);
+                code.push(opcode);
+            }
+            _ => unreachable!("only CALL-like opcodes are supported"),
+        }
+
+        code.push(opcode::STOP);
+        code
+    }
+
+    fn run_memory_expanding_call(
+        spec: MonadHardfork,
+        opcode: u8,
+        input_len: u16,
+        output_len: u16,
+    ) -> u64 {
+        let callee = Address::from([0x44; 20]);
+        let code = memory_expanding_call_contract(opcode, callee, input_len, output_len);
+        let result = run_contract_with_input_and_accounts(
+            spec,
+            Bytecode::new_raw(Bytes::from(code)),
+            Bytes::new(),
+            &[(callee, Bytecode::new_raw(Bytes::new()))],
+        );
+
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "memory-expanding CALL-like contract should succeed on {spec:?}"
+        );
+        result.tx_gas_used()
+    }
+
+    const fn standard_memory_cost(words: u64) -> u64 {
+        3 * words + words * words / 512
+    }
+
+    #[test]
+    fn test_call_like_memory_expansion_cost_is_spec_dependent() {
+        let expanded_words = (0x2000 + 0x20) / 32;
+        let standard_cost = standard_memory_cost(expanded_words);
+        let mip3_cost = crate::memory::monad_memory_cost(expanded_words as usize);
+
+        for opcode in [opcode::CALL, opcode::CALLCODE, opcode::DELEGATECALL, opcode::STATICCALL] {
+            let monad_eight_base =
+                run_memory_expanding_call(MonadHardfork::MonadEight, opcode, 0, 0);
+            let monad_eight_expanded =
+                run_memory_expanding_call(MonadHardfork::MonadEight, opcode, 0x20, 0x20);
+            assert_eq!(
+                monad_eight_expanded - monad_eight_base,
+                standard_cost,
+                "MonadEight should use standard revm memory expansion for opcode 0x{opcode:02x}"
+            );
+
+            let monad_nine_base = run_memory_expanding_call(MonadHardfork::MonadNine, opcode, 0, 0);
+            let monad_nine_expanded =
+                run_memory_expanding_call(MonadHardfork::MonadNine, opcode, 0x20, 0x20);
+            assert_eq!(
+                monad_nine_expanded - monad_nine_base,
+                mip3_cost,
+                "MonadNine should use MIP-3 memory expansion for opcode 0x{opcode:02x}"
+            );
+        }
     }
 
     #[test]
@@ -449,6 +605,88 @@ mod tests {
             assert!(
                 matches!(regular_result, ExecutionResult::Success { .. }),
                 "nested delegatecall should succeed for a regular contract on {spec:?}, got {regular_result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_top_level_delegated_staking_precompile_call_reverts() {
+        let input = Bytes::from(getEpochCall::SELECTOR.to_vec());
+
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_eip7702(STAKING_ADDRESS),
+                input.clone(),
+                &[],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Revert { ref output, .. } if output.is_empty()),
+                "delegated top-level staking call should revert with empty output on {spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_internal_call_to_delegated_staking_precompile_reverts() {
+        let delegated_target = Address::from([0x55; 20]);
+        let caller_code =
+            call_returns_success_flag_contract(delegated_target, getEpochCall::SELECTOR);
+
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_raw(Bytes::from(caller_code.clone())),
+                Bytes::new(),
+                &[(delegated_target, Bytecode::new_eip7702(STAKING_ADDRESS))],
+            );
+            let output = result.output().expect("CALL result contract should return output");
+            assert_eq!(
+                U256::from_be_slice(output.as_ref()),
+                U256::ZERO,
+                "internal CALL into delegated staking precompile should fail on {spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_top_level_delegated_reserve_balance_precompile_call_reverts() {
+        let input = Bytes::from(dippedIntoReserveCall::SELECTOR.to_vec());
+
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_eip7702(RESERVE_BALANCE_ADDRESS),
+                input.clone(),
+                &[],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Revert { ref output, .. } if output.is_empty()),
+                "delegated top-level reserve-balance call should revert with empty output on {spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_internal_call_to_delegated_reserve_balance_precompile_reverts() {
+        let delegated_target = Address::from([0x66; 20]);
+        let caller_code =
+            call_returns_success_flag_contract(delegated_target, dippedIntoReserveCall::SELECTOR);
+
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_raw(Bytes::from(caller_code.clone())),
+                Bytes::new(),
+                &[(delegated_target, Bytecode::new_eip7702(RESERVE_BALANCE_ADDRESS))],
+            );
+            let output = result.output().expect("CALL result contract should return output");
+            assert_eq!(
+                U256::from_be_slice(output.as_ref()),
+                U256::ZERO,
+                "internal CALL into delegated reserve-balance precompile should fail on {spec:?}"
             );
         }
     }
