@@ -242,8 +242,7 @@ impl MonadPrecompiles {
         ]);
 
         // Add P256VERIFY precompile (RIP-7212 / EIP-7951)
-        // Address: 0x0100, Gas: 3450 (same as Ethereum pre-Osaka)
-        precompiles.extend([secp256r1::P256VERIFY]);
+        precompiles.extend([secp256r1::P256VERIFY_OSAKA]);
 
         Self {
             inner: EthPrecompiles {
@@ -630,11 +629,11 @@ mod tests {
         // Execute with high gas limit
         let result = precompile.execute(&input, 10_000).expect("P256VERIFY should succeed");
 
-        // Verify Ethereum pre-Osaka gas cost is used (3450)
+        // Verify Osaka gas cost is used (6900, matching C++ client)
         assert_eq!(
             result.gas_used,
-            revm::precompile::secp256r1::P256VERIFY_BASE_GAS_FEE,
-            "P256VERIFY should use Ethereum gas cost of 3450"
+            revm::precompile::secp256r1::P256VERIFY_BASE_GAS_FEE_OSAKA,
+            "P256VERIFY should use Osaka gas cost of 6900"
         );
     }
 
