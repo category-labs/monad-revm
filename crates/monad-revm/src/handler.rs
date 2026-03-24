@@ -68,14 +68,22 @@ where
         cfg,
     )?;
 
+    let is_balance_check_disabled = cfg.is_balance_check_disabled();
     let gas_fee =
         U256::from(tx.gas_limit()) * U256::from(tx.effective_gas_price(block.basefee() as u128));
     let balance = *caller.balance();
-    if balance < gas_fee {
+    if !is_balance_check_disabled && balance < gas_fee {
         return Err(InvalidTransaction::Str("insufficient balance for fee".into()).into());
     }
 
-    caller.set_balance(balance - gas_fee);
+    let mut new_balance = balance.saturating_sub(gas_fee);
+    if is_balance_check_disabled {
+        // Preserve upstream revm semantics for simulations/fuzzing: skip rejection,
+        // but keep enough balance for the value transfer path to proceed.
+        new_balance = new_balance.max(tx.value());
+    }
+
+    caller.set_balance(new_balance);
     if tx.kind().is_call() {
         caller.bump_nonce();
     }
@@ -480,6 +488,48 @@ mod tests {
             U256::from(1),
             "Caller should only be charged gas upfront when value transfer fails later"
         );
+    }
+
+    #[cfg(feature = "optional_balance_check")]
+    #[test]
+    fn test_balance_check_disabled_skips_fee_rejection_and_preserves_value_path() {
+        let caller = Address::from([1u8; 20]);
+        let recipient = Address::from([3u8; 20]);
+        let gas_limit = 100_000u64;
+        let gas_price = 1_000_000_000u128;
+        let value = U256::from(2);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            revm::state::AccountInfo { balance: U256::from(1), ..Default::default() },
+        );
+
+        let ctx = monad_context_with_db(db);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+        evm.ctx().cfg.0.disable_balance_check = true;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .to(recipient)
+            .value(value)
+            .gas_limit(gas_limit)
+            .gas_price(gas_price)
+            .build_fill();
+
+        let result =
+            evm.transact(tx).expect("disabled balance checks should admit the transaction");
+        let caller_balance = result.state.get(&caller).map(|a| a.info.balance).unwrap_or_default();
+        let recipient_balance =
+            result.state.get(&recipient).map(|a| a.info.balance).unwrap_or_default();
+
+        assert_eq!(
+            caller_balance,
+            U256::ZERO,
+            "caller balance should be topped up only enough to send value"
+        );
+        assert_eq!(recipient_balance, value, "recipient should receive the transfer value");
     }
 
     /// Helper to create a RecoveredAuthorization with a specific authority address.
