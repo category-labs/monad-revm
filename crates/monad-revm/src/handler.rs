@@ -6,13 +6,14 @@
 //! - No header validation for prevrandao or excess_blob_gas (Monad doesn't use these)
 use revm::{
     context_interface::{
+        journaled_state::account::JournaledAccountTr,
         result::{HaltReason, InvalidTransaction},
         transaction::{AuthorizationTr, TransactionType},
-        Block, Cfg, ContextTr, JournalTr, Transaction,
+        Block, Cfg, ContextTr, Database, JournalTr, Transaction,
     },
     handler::{
-        evm::FrameTr, handler::EvmTrError, validation, EthFrame, EvmTr, FrameResult, Handler,
-        MainnetHandler,
+        evm::FrameTr, handler::EvmTrError, pre_execution, validation, EthFrame, EvmTr, FrameResult,
+        Handler, MainnetHandler,
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{interpreter::EthInterpreter, interpreter_action::FrameInit},
@@ -49,6 +50,36 @@ impl<EVM, ERROR, FRAME> Default for MonadHandler<EVM, ERROR, FRAME> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn validate_monad_against_state_and_deduct_caller<CTX, ERROR>(
+    context: &mut CTX,
+) -> Result<(), ERROR>
+where
+    CTX: ContextTr,
+    ERROR: From<InvalidTransaction> + From<<CTX::Db as Database>::Error>,
+{
+    let (block, tx, cfg, journal, _, _) = context.all_mut();
+
+    let mut caller = journal.load_account_with_code_mut(tx.caller())?.data;
+    pre_execution::validate_account_nonce_and_code_with_components(
+        &caller.account().info,
+        tx,
+        cfg,
+    )?;
+
+    let gas_fee =
+        U256::from(tx.gas_limit()) * U256::from(tx.effective_gas_price(block.basefee() as u128));
+    let balance = *caller.balance();
+    if balance < gas_fee {
+        return Err(InvalidTransaction::Str("insufficient balance for fee".into()).into());
+    }
+
+    caller.set_balance(balance - gas_fee);
+    if tx.kind().is_call() {
+        caller.bump_nonce();
+    }
+    Ok(())
 }
 
 impl<EVM, ERROR, FRAME> Handler for MonadHandler<EVM, ERROR, FRAME>
@@ -101,7 +132,7 @@ where
     }
 
     fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
-        self.validate_against_state_and_deduct_caller(evm)?;
+        validate_monad_against_state_and_deduct_caller::<_, Self::Error>(evm.ctx())?;
         self.load_accounts(evm)?;
         let gas = self.apply_eip7702_auth_list(evm)?;
 
@@ -373,6 +404,82 @@ mod tests {
             }
             _ => panic!("Expected successful transaction"),
         }
+    }
+
+    #[test]
+    fn test_rejects_when_balance_cannot_cover_fee() {
+        let caller = Address::from([1u8; 20]);
+        let gas_limit = 100_000u64;
+        let gas_price = 1_000_000_000u128;
+        let gas_fee = U256::from(gas_limit as u128 * gas_price);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            revm::state::AccountInfo { balance: gas_fee - U256::from(1), ..Default::default() },
+        );
+
+        let ctx = monad_context_with_db(db);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .to(Address::from([3u8; 20]))
+            .gas_limit(gas_limit)
+            .gas_price(gas_price)
+            .build_fill();
+
+        let result = evm.transact(tx);
+        assert!(
+            matches!(
+                result,
+                Err(EVMError::Transaction(InvalidTransaction::Str(ref msg)))
+                    if msg.as_ref() == "insufficient balance for fee"
+            ),
+            "Expected fee-only balance rejection, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_accepts_transaction_when_only_fee_is_covered() {
+        let caller = Address::from([1u8; 20]);
+        let gas_limit = 100_000u64;
+        let gas_price = 1_000_000_000u128;
+        let gas_fee = U256::from(gas_limit as u128 * gas_price);
+        let initial_balance = gas_fee + U256::from(1);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            revm::state::AccountInfo { balance: initial_balance, ..Default::default() },
+        );
+
+        let ctx = monad_context_with_db(db);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .to(Address::from([3u8; 20]))
+            .value(U256::from(2))
+            .gas_limit(gas_limit)
+            .gas_price(gas_price)
+            .build_fill();
+
+        let result = evm.transact(tx);
+        assert!(
+            result.is_ok(),
+            "Transaction should pass fee-only admission even if value later fails, got: {result:?}"
+        );
+
+        let result = result.expect("fee-only validation should admit the transaction");
+        let caller_balance = result.state.get(&caller).map(|a| a.info.balance).unwrap_or_default();
+        assert_eq!(
+            caller_balance,
+            U256::from(1),
+            "Caller should only be charged gas upfront when value transfer fails later"
+        );
     }
 
     /// Helper to create a RecoveredAuthorization with a specific authority address.
