@@ -357,14 +357,41 @@ mod tests {
                 &[],
             );
             assert!(
-                matches!(result, ExecutionResult::Halt { .. }),
-                "CREATE should halt for delegated accounts on {spec:?}, got {result:?}"
+                matches!(
+                    result,
+                    ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+                ),
+                "CREATE should halt with NotActivated for delegated accounts on {spec:?}, got {result:?}"
             );
         }
     }
 
     #[test]
-    fn test_create2_is_rejected_inside_nested_delegated_execution() {
+    fn test_create2_is_rejected_for_delegated_accounts() {
+        let delegated_address = Address::from([0x33; 20]);
+        let delegated_code =
+            vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE2];
+
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_delegated_contract(
+                spec,
+                Bytecode::new_eip7702(delegated_address),
+                delegated_address,
+                delegated_code.clone(),
+                &[],
+            );
+            assert!(
+                matches!(
+                    result,
+                    ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+                ),
+                "CREATE2 should halt with NotActivated for delegated accounts on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_nested_delegatecall_to_create2_only_fails_for_delegated_accounts() {
         let delegated_address = Address::from([0x33; 20]);
         let creator = Address::from([0x44; 20]);
 
@@ -379,6 +406,7 @@ mod tests {
             opcode::JUMPI,
             opcode::INVALID,
             opcode::JUMPDEST,
+            opcode::STOP,
         ]);
 
         let creator_code = Bytecode::new_raw(Bytes::from(vec![
@@ -390,7 +418,7 @@ mod tests {
         ]));
 
         for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
-            let result = run_delegated_contract(
+            let delegated_result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
                 delegated_address,
@@ -398,8 +426,23 @@ mod tests {
                 &[(creator, creator_code.clone())],
             );
             assert!(
-                matches!(result, ExecutionResult::Halt { .. }),
-                "CREATE2 should halt for nested delegated execution on {spec:?}, got {result:?}"
+                matches!(
+                    delegated_result,
+                    ExecutionResult::Halt { reason: HaltReason::InvalidFEOpcode, .. }
+                ),
+                "nested delegatecall should hit the INVALID sentinel when delegated CREATE2 fails on {spec:?}, got {delegated_result:?}"
+            );
+
+            let regular_result = run_delegated_contract(
+                spec,
+                Bytecode::new_raw(Bytes::from(delegated_code.clone())),
+                delegated_address,
+                delegated_code.clone(),
+                &[(creator, creator_code.clone())],
+            );
+            assert!(
+                matches!(regular_result, ExecutionResult::Success { .. }),
+                "nested delegatecall should succeed for a regular contract on {spec:?}, got {regular_result:?}"
             );
         }
     }
