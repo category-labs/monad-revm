@@ -62,6 +62,17 @@ pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX
     use revm::bytecode::opcode::*;
     instructions.insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
     instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
+    instructions.insert_instruction(CALL, Instruction::new(opcodes::call, WARM_STORAGE_READ_COST));
+    instructions
+        .insert_instruction(CALLCODE, Instruction::new(opcodes::call_code, WARM_STORAGE_READ_COST));
+    instructions.insert_instruction(
+        DELEGATECALL,
+        Instruction::new(opcodes::delegate_call, WARM_STORAGE_READ_COST),
+    );
+    instructions.insert_instruction(
+        STATICCALL,
+        Instruction::new(opcodes::static_call, WARM_STORAGE_READ_COST),
+    );
 
     // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
     if MonadSpecId::MonadNine.is_enabled_in(spec) {
@@ -94,22 +105,6 @@ pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX
         instructions.insert_instruction(LOG3, Instruction::new(opcodes::log::<3, _>, gas::LOG));
         instructions.insert_instruction(LOG4, Instruction::new(opcodes::log::<4, _>, gas::LOG));
 
-        // Call opcodes
-        instructions
-            .insert_instruction(CALL, Instruction::new(opcodes::call, gas::WARM_STORAGE_READ_COST));
-        instructions.insert_instruction(
-            CALLCODE,
-            Instruction::new(opcodes::call_code, gas::WARM_STORAGE_READ_COST),
-        );
-        instructions.insert_instruction(
-            DELEGATECALL,
-            Instruction::new(opcodes::delegate_call, gas::WARM_STORAGE_READ_COST),
-        );
-        instructions.insert_instruction(
-            STATICCALL,
-            Instruction::new(opcodes::static_call, gas::WARM_STORAGE_READ_COST),
-        );
-
         // Return opcodes
         instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret, 0));
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert, 0));
@@ -134,8 +129,13 @@ mod tests {
     use super::*;
     use crate::{
         api::{builder::MonadBuilder, default_ctx::monad_context_with_db},
+        reserve_balance::{
+            abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
+        },
+        staking::{interface::IMonadStaking::getEpochCall, storage::STAKING_ADDRESS},
         MonadCfgEnv,
     };
+    use alloy_sol_types::SolCall;
     use revm::primitives::hardfork::SpecId;
     use revm::{
         bytecode::opcode,
@@ -260,6 +260,70 @@ mod tests {
             .build_fill();
 
         evm.transact(tx).expect("delegated contract call should execute").result
+    }
+
+    fn run_contract_with_input_and_accounts(
+        spec: MonadSpecId,
+        target_code: Bytecode,
+        input: Bytes,
+        extra_accounts: &[(Address, Bytecode)],
+    ) -> ExecutionResult<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let target = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(target, AccountInfo::default().with_code(target_code));
+        for (address, code) in extra_accounts {
+            db.insert_account_info(*address, AccountInfo::default().with_code(code.clone()));
+        }
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let mut evm = ctx.build_monad();
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(target))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .data(input)
+            .build_fill();
+
+        evm.transact(tx).expect("contract call should execute").result
+    }
+
+    fn call_returns_success_flag_contract(target: Address, selector: [u8; 4]) -> Vec<u8> {
+        let mut code = vec![opcode::PUSH4];
+        code.extend_from_slice(&selector);
+        code.extend_from_slice(&[
+            opcode::PUSH1,
+            0x1c,
+            opcode::MSTORE,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH1,
+            0x04,
+            opcode::PUSH1,
+            0x1c,
+            opcode::PUSH0,
+            opcode::PUSH20,
+        ]);
+        code.extend_from_slice(target.as_slice());
+        code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::CALL,
+            opcode::PUSH0,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::RETURN,
+        ]);
+        code
     }
 
     #[test]
@@ -443,6 +507,86 @@ mod tests {
             assert!(
                 matches!(regular_result, ExecutionResult::Success { .. }),
                 "nested delegatecall should succeed for a regular contract on {spec:?}, got {regular_result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_top_level_delegated_staking_precompile_call_reverts() {
+        let input = Bytes::from(getEpochCall::SELECTOR.to_vec());
+
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_eip7702(STAKING_ADDRESS),
+                input.clone(),
+                &[],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Revert { ref output, .. } if output.is_empty()),
+                "delegated top-level staking call should revert with empty output on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_internal_call_to_delegated_staking_precompile_reverts() {
+        let delegated_target = Address::from([0x55; 20]);
+        let caller_code =
+            call_returns_success_flag_contract(delegated_target, getEpochCall::SELECTOR);
+
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_raw(Bytes::from(caller_code.clone())),
+                Bytes::new(),
+                &[(delegated_target, Bytecode::new_eip7702(STAKING_ADDRESS))],
+            );
+            let output = result.output().expect("CALL result contract should return output");
+            assert_eq!(
+                U256::from_be_slice(output.as_ref()),
+                U256::ZERO,
+                "internal CALL into delegated staking precompile should fail on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_top_level_delegated_reserve_balance_precompile_call_reverts() {
+        let input = Bytes::from(dippedIntoReserveCall::SELECTOR.to_vec());
+
+        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_eip7702(RESERVE_BALANCE_ADDRESS),
+                input.clone(),
+                &[],
+            );
+            assert!(
+                matches!(result, ExecutionResult::Revert { ref output, .. } if output.is_empty()),
+                "delegated top-level reserve-balance call should revert with empty output on {spec:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_internal_call_to_delegated_reserve_balance_precompile_reverts() {
+        let delegated_target = Address::from([0x66; 20]);
+        let caller_code =
+            call_returns_success_flag_contract(delegated_target, dippedIntoReserveCall::SELECTOR);
+
+        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                Bytecode::new_raw(Bytes::from(caller_code.clone())),
+                Bytes::new(),
+                &[(delegated_target, Bytecode::new_eip7702(RESERVE_BALANCE_ADDRESS))],
+            );
+            let output = result.output().expect("CALL result contract should return output");
+            assert_eq!(
+                U256::from_be_slice(output.as_ref()),
+                U256::ZERO,
+                "internal CALL into delegated reserve-balance precompile should fail on {spec:?}, got {result:?}"
             );
         }
     }

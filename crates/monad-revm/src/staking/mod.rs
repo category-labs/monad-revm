@@ -56,6 +56,17 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         return Ok(None);
     }
 
+    let is_delegated_call =
+        inputs.scheme == CallScheme::Call && inputs.target_address != inputs.bytecode_address;
+
+    if is_delegated_call {
+        return Ok(Some(InterpreterResult {
+            result: InstructionResult::Revert,
+            gas: Gas::new_spent(inputs.gas_limit),
+            output: Bytes::new(),
+        }));
+    }
+
     // Reject non-CALL schemes (DELEGATECALL, STATICCALL, CALLCODE).
     // DELEGATECALL would read storage from the wrong address context.
     // STATICCALL is rejected because some view functions may modify state internally.
@@ -1587,5 +1598,18 @@ mod tests {
         let mut ctx = crate::api::default_ctx::MonadContext::monad();
         let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
         assert!(result.is_none(), "non-staking address should return None");
+    }
+
+    #[test]
+    fn test_delegated_call_rejected() {
+        let mut inputs =
+            staking_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
+        inputs.target_address = Address::ZERO;
+        let mut ctx = crate::api::default_ctx::MonadContext::monad();
+        let result = run_staking_precompile(&mut ctx, &inputs).unwrap();
+        let result = result.expect("should return Some for staking address");
+        assert_eq!(result.result, InstructionResult::Revert);
+        assert!(result.output.is_empty());
+        assert_eq!(result.gas.remaining(), 0);
     }
 }

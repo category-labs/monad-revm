@@ -29,7 +29,10 @@ where
         return Ok(None);
     }
 
-    if inputs.scheme != CallScheme::Call || inputs.is_static {
+    let is_delegated_call =
+        inputs.scheme == CallScheme::Call && inputs.target_address != inputs.bytecode_address;
+
+    if inputs.scheme != CallScheme::Call || inputs.is_static || is_delegated_call {
         return Ok(Some(revert_result(inputs.gas_limit, Bytes::new())));
     }
 
@@ -204,6 +207,22 @@ mod tests {
             .expect("should dispatch reserve-balance precompile");
         assert_eq!(result.result, InstructionResult::Revert);
         assert!(result.output.is_empty());
+    }
+
+    #[test]
+    fn test_delegated_call_rejected() {
+        let mut ctx = crate::api::default_ctx::MonadContext::monad()
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+        let mut inputs =
+            reserve_balance_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
+        inputs.target_address = Address::ZERO;
+
+        let result = run_reserve_balance_precompile(&mut ctx, &inputs)
+            .unwrap()
+            .expect("should dispatch reserve-balance precompile");
+        assert_eq!(result.result, InstructionResult::Revert);
+        assert!(result.output.is_empty());
+        assert_eq!(result.gas.remaining(), 0);
     }
 
     #[test]
