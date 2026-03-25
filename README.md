@@ -301,6 +301,10 @@ monad-revm/
 - [Monad precompiles](https://docs.monad.xyz/developer-essentials/precompiles)
 - [Monad staking precompile docs](https://docs.monad.xyz/developer-essentials/staking/staking-precompile)
 
+## Limitations
+
+- `monad-revm` is not yet fully compatible with the C++ client for EIP-7702 accounts delegated to Monad-specific precompile addresses (`staking` and `reserve balance`), and those calls may succeed locally where the C++ client rejects them.
+
 ## License
 
 Revm is licensed under MIT License.
