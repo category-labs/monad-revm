@@ -4,14 +4,15 @@
 [![Documentation](https://docs.rs/monad-revm/badge.svg)](https://docs.rs/monad-revm)
 [![License](https://img.shields.io/crates/l/monad-revm.svg)](LICENSE)
 
-`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, full staking precompile support, and the Monad reserve-balance precompile.
+`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, staking precompile support, and the Monad reserve-balance precompile.
 
 ## EVM Compatibility
 
 | Component | Version |
 |-----------|---------|
 | **revm** | v34.0.0 |
-| **Monad spec** | `MONAD_NINE` (Osaka-compatible with Monad-specific exclusions) |
+| **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadNext` |
+| **Default Monad spec** | `MonadNine` (Osaka-compatible with Monad-specific exclusions) |
 
 ## What Monad Changes
 
@@ -206,7 +207,7 @@ Or from crates.io:
 
 ```toml
 [dependencies]
-monad-revm = "0.1"
+monad-revm = "<latest>"
 ```
 
 ## Usage
@@ -217,7 +218,7 @@ monad-revm = "0.1"
 use monad_revm::{MonadBuilder, DefaultMonad};
 use revm::{
     context::{Context, TxEnv},
-    database::InMemoryDB,
+    primitives::{TxKind, U256},
     ExecuteEvm,
 };
 
@@ -226,7 +227,7 @@ let mut evm = ctx.build_monad();
 
 let tx = TxEnv::builder()
     .caller(caller_address)
-    .to(contract_address)
+    .kind(TxKind::Call(contract_address))
     .value(U256::from(1000))
     .gas_limit(100_000)
     .gas_price(1_000_000_000)
@@ -264,18 +265,30 @@ monad-revm/
 │   └── monad-revm/
 │       └── src/
 │           ├── lib.rs
-│           ├── spec.rs
+│           ├── chain.rs
 │           ├── cfg.rs
+│           ├── evm.rs
 │           ├── handler.rs
 │           ├── instructions.rs
+│           ├── journal.rs
+│           ├── memory/
+│           │   ├── mod.rs
+│           │   └── opcodes.rs
 │           ├── precompiles.rs
-│           ├── evm.rs
+│           ├── reserve_balance/
+│           │   ├── abi.rs
+│           │   ├── error.rs
+│           │   ├── interface.rs
+│           │   ├── mod.rs
+│           │   └── tracker.rs
+│           ├── spec.rs
 │           ├── api/
 │           │   ├── block.rs
 │           │   ├── builder.rs
 │           │   ├── exec.rs
 │           │   └── default_ctx.rs
 │           └── staking/
+│               ├── constants.rs
 │               ├── mod.rs
 │               ├── write.rs
 │               ├── abi.rs
