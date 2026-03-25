@@ -14,6 +14,13 @@ pub const MONAD_TX_GAS_LIMIT_CAP: u64 = 30_000_000;
 /// MIP-3: Maximum memory per transaction (8 MB), pooled across the call stack.
 pub const MONAD_MEMORY_LIMIT: u64 = 8 * 1024 * 1024;
 
+/// REVM's default memory limit (`2^32 - 1` bytes).
+///
+/// We use this sentinel to detect when callers left the memory limit unset, so
+/// MonadNine+ can apply its chain default while still honoring explicit
+/// overrides from downstream integrators such as Foundry.
+const REVM_DEFAULT_MEMORY_LIMIT: u64 = (1 << 32) - 1;
+
 /// Monad maximum contract code size.
 ///
 /// Monad uses a larger code size limit than Ethereum's EIP-170 (24KB).
@@ -191,10 +198,15 @@ impl Cfg for MonadCfgEnv {
     }
 
     fn memory_limit(&self) -> u64 {
+        let inner_limit = <CfgEnv<MonadSpecId> as Cfg>::memory_limit(&self.0);
         if MonadSpecId::MonadNine.is_enabled_in(self.0.spec) {
-            MONAD_MEMORY_LIMIT
+            if inner_limit == REVM_DEFAULT_MEMORY_LIMIT {
+                MONAD_MEMORY_LIMIT
+            } else {
+                inner_limit
+            }
         } else {
-            <CfgEnv<MonadSpecId> as Cfg>::memory_limit(&self.0)
+            inner_limit
         }
     }
 
@@ -253,5 +265,24 @@ mod tests {
 
         cfg.0.tx_gas_limit_cap = Some(12_345_678);
         assert_eq!(cfg.tx_gas_limit_cap(), 12_345_678);
+    }
+
+    #[test]
+    fn test_memory_limit_defaults_to_monad_limit_for_monad_nine() {
+        let cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine);
+        assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
+    }
+
+    #[test]
+    fn test_memory_limit_respects_explicit_override_for_monad_nine() {
+        let mut cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine);
+        cfg.0.memory_limit = 16_000;
+        assert_eq!(cfg.memory_limit(), 16_000);
+    }
+
+    #[test]
+    fn test_memory_limit_uses_inner_value_before_monad_nine() {
+        let cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadEight);
+        assert_eq!(cfg.memory_limit(), REVM_DEFAULT_MEMORY_LIMIT);
     }
 }
