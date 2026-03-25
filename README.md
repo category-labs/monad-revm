@@ -207,7 +207,7 @@ Or from crates.io:
 
 ```toml
 [dependencies]
-monad-revm = "<latest>"
+monad-revm = "0.3.0"
 ```
 
 ## Usage
