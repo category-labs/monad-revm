@@ -37,6 +37,12 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 
     /// Updates the active Monad spec for this journal.
     fn set_monad_spec(&mut self, spec: MonadSpecId);
+
+    /// Returns the page access tracker.
+    fn page_access(&self) -> &PageAccessTracker;
+
+    /// Returns the page access tracker mutably.
+    fn page_access_mut(&mut self) -> &mut PageAccessTracker;
 }
 
 /// Monad journal wrapper.
@@ -131,6 +137,14 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
             self.page_access.clear();
             self.monad_spec = spec;
         }
+    }
+
+    fn page_access(&self) -> &PageAccessTracker {
+        &self.page_access
+    }
+
+    fn page_access_mut(&mut self) -> &mut PageAccessTracker {
+        &mut self.page_access
     }
 }
 

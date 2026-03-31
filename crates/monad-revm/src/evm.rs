@@ -1,5 +1,6 @@
 // MonadEvm - wrapper around base Evm with Monad-specific types.
 use crate::{
+    api::exec::MonadContextTr,
     instructions::{monad_instructions, MonadInstructions},
     precompiles::MonadPrecompiles,
     MonadSpecId,
@@ -28,7 +29,7 @@ pub struct MonadEvm<
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadSpecId>>,
+    CTX: MonadContextTr + ContextTr<Cfg: Cfg<Spec = MonadSpecId>>,
 {
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {

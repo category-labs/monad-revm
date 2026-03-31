@@ -24,6 +24,8 @@ pub mod journal;
 pub mod memory;
 /// Helpers for paged storage demo semantics.
 pub mod page;
+/// MIP-8 storage opcode overrides.
+pub mod page_opcode;
 /// Monad precompiles with custom gas pricing.
 pub mod precompiles;
 /// Monad reserve-balance precompile (0x1001).

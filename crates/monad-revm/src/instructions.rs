@@ -1,11 +1,10 @@
-use crate::MonadSpecId;
+use crate::{api::exec::MonadContextTr, MonadSpecId};
 use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::EthInstructions,
     interpreter::{
         instructions::{instruction_table_gas_changes_spec, Instruction},
         interpreter::EthInterpreter,
-        Host,
     },
 };
 
@@ -50,7 +49,7 @@ pub fn monad_gas_params(spec: MonadSpecId) -> GasParams {
 ///
 /// For MonadNine+ (MIP-3), all memory-expanding opcodes are replaced with
 /// Monad-local handlers that use the linear cost model (`words / 2`).
-pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX> {
+pub fn monad_instructions<CTX: MonadContextTr>(spec: MonadSpecId) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
     let mut instructions =
         EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec);
@@ -113,6 +112,13 @@ pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX
         // Return opcodes
         instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret, 0));
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert, 0));
+    }
+
+    if MonadSpecId::MonadNext.is_enabled_in(spec) {
+        use crate::page_opcode;
+        use revm::bytecode::opcode::SSTORE;
+
+        instructions.insert_instruction(SSTORE, Instruction::new(page_opcode::sstore, 0));
     }
 
     instructions
