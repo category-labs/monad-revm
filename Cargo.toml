@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.91"
 authors = ["Haythem Sellami - Category Labs <hsellami@category.xyz>"]
 license = "MIT"
 repository = "https://github.com/category-labs/monad-revm"
@@ -29,12 +29,12 @@ redundant-clone = "warn"
 monad-revm = { version = "0.3.0", path = "crates/monad-revm", default-features = false }
 
 # revm
-revm = { version = "34.0.0", default-features = false }
-revm-interpreter = { version = "32.0.0", default-features = false }
+revm = { version = "38.0.0", default-features = false }
+revm-interpreter = { version = "35.0.1", default-features = false }
 auto_impl = "1"
 
 # alloy
-alloy-sol-types = { version = "1.5", default-features = false }
+alloy-sol-types = { version = "1.5.2", default-features = false }
 
 # misc
 serde = { version = "1", default-features = false, features = ["derive", "rc"] }
