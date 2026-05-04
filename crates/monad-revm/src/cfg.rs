@@ -190,6 +190,14 @@ impl Cfg for MonadCfgEnv {
         <CfgEnv<MonadSpecId> as Cfg>::is_fee_charge_disabled(&self.0)
     }
 
+    fn is_eip7708_disabled(&self) -> bool {
+        <CfgEnv<MonadSpecId> as Cfg>::is_eip7708_disabled(&self.0)
+    }
+
+    fn is_eip7708_delayed_burn_disabled(&self) -> bool {
+        <CfgEnv<MonadSpecId> as Cfg>::is_eip7708_delayed_burn_disabled(&self.0)
+    }
+
     fn memory_limit(&self) -> u64 {
         if MonadSpecId::MonadNine.is_enabled_in(self.0.spec) {
             MONAD_MEMORY_LIMIT
@@ -200,6 +208,10 @@ impl Cfg for MonadCfgEnv {
 
     fn gas_params(&self) -> &GasParams {
         &self.0.gas_params
+    }
+
+    fn is_amsterdam_eip8037_enabled(&self) -> bool {
+        <CfgEnv<MonadSpecId> as Cfg>::is_amsterdam_eip8037_enabled(&self.0)
     }
 }
 

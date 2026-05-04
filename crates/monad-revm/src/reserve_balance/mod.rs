@@ -65,7 +65,7 @@ where
 
 fn success_result(gas_limit: u64, gas_used: u64, value: bool) -> InterpreterResult {
     let mut gas = Gas::new(gas_limit);
-    let _ = gas.record_cost(gas_used);
+    let _ = gas.record_regular_cost(gas_used);
     let mut output = [0u8; 32];
     output[31] = u8::from(value);
     InterpreterResult {
@@ -81,13 +81,13 @@ fn revert_error_result(gas_limit: u64, error: ReserveBalanceError) -> Interprete
 
 fn revert_result(gas_limit: u64, output: Bytes) -> InterpreterResult {
     let mut gas = Gas::new(gas_limit);
-    let _ = gas.record_cost(gas_limit);
+    let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult { result: InstructionResult::Revert, gas, output }
 }
 
 fn oog_result(gas_limit: u64) -> InterpreterResult {
     let mut gas = Gas::new(gas_limit);
-    let _ = gas.record_cost(gas_limit);
+    let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult { result: InstructionResult::PrecompileOOG, gas, output: Bytes::new() }
 }
 
@@ -105,10 +105,11 @@ mod tests {
     };
     use alloy_sol_types::SolCall;
     use revm::{
+        bytecode::Bytecode,
         context_interface::JournalTr,
         database::InMemoryDB,
         interpreter::{CallInput, CallValue},
-        primitives::{Address, U256},
+        primitives::{Address, B256, U256},
         state::AccountInfo,
     };
 
@@ -123,8 +124,9 @@ mod tests {
             input: CallInput::Bytes(input),
             return_memory_offset: 0..0,
             gas_limit,
+            reservoir: 0,
             bytecode_address: RESERVE_BALANCE_ADDRESS,
-            known_bytecode: None,
+            known_bytecode: (B256::ZERO, Bytecode::default()),
             target_address: RESERVE_BALANCE_ADDRESS,
             caller: Address::ZERO,
             value,
