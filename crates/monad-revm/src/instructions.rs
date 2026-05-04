@@ -297,14 +297,17 @@ mod tests {
     }
 
     #[test]
-    fn test_extended_stack_opcode_bytes_are_unknown_on_monad_nine_and_next() {
+    fn test_extended_stack_opcode_bytes_are_unavailable_on_monad_nine_and_next() {
         for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
             for opcode in [DUPN_OPCODE, SWAPN_OPCODE, EXCHANGE_OPCODE] {
                 let result = run_contract(spec, vec![opcode]);
                 assert!(
                     matches!(
                         result,
-                        ExecutionResult::Halt { reason: HaltReason::OpcodeNotFound, .. }
+                        ExecutionResult::Halt {
+                            reason: HaltReason::OpcodeNotFound | HaltReason::NotActivated,
+                            ..
+                        }
                     ),
                     "opcode 0x{opcode:02x} should be unavailable on {spec:?}, got {result:?}"
                 );

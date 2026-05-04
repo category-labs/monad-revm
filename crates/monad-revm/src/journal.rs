@@ -14,7 +14,8 @@ use revm::{
     database_interface::Database,
     inspector::JournalExt,
     primitives::{
-        hardfork::SpecId, Address, HashMap, HashSet, Log, StorageKey, StorageValue, B256, U256,
+        hardfork::SpecId, Address, AddressMap, AddressSet, HashSet, Log, StorageKey, StorageValue,
+        B256, U256,
     },
     state::{Account, EvmState},
 };
@@ -178,7 +179,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         Ok(result)
     }
 
-    fn warm_access_list(&mut self, access_list: HashMap<Address, HashSet<StorageKey>>) {
+    fn warm_access_list(&mut self, access_list: AddressMap<HashSet<StorageKey>>) {
         self.inner.warm_access_list(access_list)
     }
 
@@ -186,16 +187,20 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         self.inner.warm_coinbase_account(address)
     }
 
-    fn warm_precompiles(&mut self, precompiles: HashSet<Address>) {
+    fn warm_precompiles(&mut self, precompiles: AddressSet) {
         self.inner.warm_precompiles(precompiles)
     }
 
-    fn precompile_addresses(&self) -> &HashSet<Address> {
+    fn precompile_addresses(&self) -> &AddressSet {
         self.inner.precompile_addresses()
     }
 
     fn set_spec_id(&mut self, spec_id: SpecId) {
         self.inner.set_spec_id(spec_id)
+    }
+
+    fn set_eip7708_config(&mut self, disabled: bool, delayed_burn_disabled: bool) {
+        self.inner.set_eip7708_config(disabled, delayed_burn_disabled)
     }
 
     fn touch_account(&mut self, address: Address) {
@@ -264,7 +269,10 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         &mut self,
         address: Address,
         skip_cold_load: bool,
-    ) -> Result<StateLoad<Self::JournaledAccount<'_>>, <Self::Database as Database>::Error> {
+    ) -> Result<
+        StateLoad<Self::JournaledAccount<'_>>,
+        JournalLoadError<<Self::Database as Database>::Error>,
+    > {
         self.inner.load_account_mut_skip_cold_load(address, skip_cold_load)
     }
 
@@ -408,7 +416,11 @@ mod tests {
     fn checkpoint_revert_ignores_out_of_bounds_journal_index() {
         let mut journal = MonadJournal::new(EmptyDB::new());
 
-        journal.checkpoint_revert(JournalCheckpoint { log_i: 0, journal_i: 4 });
+        journal.checkpoint_revert(JournalCheckpoint {
+            log_i: 0,
+            journal_i: 4,
+            selfdestructed_i: 0,
+        });
 
         assert!(journal.journal().is_empty());
     }

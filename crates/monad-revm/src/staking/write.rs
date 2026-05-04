@@ -23,7 +23,7 @@ use super::{
 use alloy_sol_types::{SolCall, SolEvent};
 use revm::{
     interpreter::{Gas, InstructionResult, InterpreterResult},
-    precompile::PrecompileError,
+    precompile::PrecompileHalt,
     primitives::{Address, Bytes, Log, LogData, B256, U256},
 };
 
@@ -34,27 +34,26 @@ use revm::{
 /// Checked addition for U256.
 ///
 /// C++ parity: checked math failures map to staking internal error.
-fn checked_add_u256(a: U256, b: U256) -> Result<U256, PrecompileError> {
-    a.checked_add(b).ok_or_else(|| PrecompileError::Other("internal error".into()))
+fn checked_add_u256(a: U256, b: U256) -> Result<U256, PrecompileHalt> {
+    a.checked_add(b).ok_or_else(|| PrecompileHalt::Other("internal error".into()))
 }
 
 /// Checked subtraction for U256.
 ///
 /// C++ parity: checked math failures map to staking internal error.
-fn checked_sub_u256(a: U256, b: U256) -> Result<U256, PrecompileError> {
-    a.checked_sub(b).ok_or_else(|| PrecompileError::Other("internal error".into()))
+fn checked_sub_u256(a: U256, b: U256) -> Result<U256, PrecompileHalt> {
+    a.checked_sub(b).ok_or_else(|| PrecompileHalt::Other("internal error".into()))
 }
 
-/// Checked multiply-then-divide for U256. Returns `PrecompileError` on
+/// Checked multiply-then-divide for U256. Returns `PrecompileHalt` on
 /// overflow (in the multiplication) or division by zero.
 ///
 /// C++ parity: checked math failures map to staking internal error.
-fn checked_mul_div_u256(a: U256, b: U256, d: U256) -> Result<U256, PrecompileError> {
+fn checked_mul_div_u256(a: U256, b: U256, d: U256) -> Result<U256, PrecompileHalt> {
     if d.is_zero() {
-        return Err(PrecompileError::Other("internal error".into()));
+        return Err(PrecompileHalt::Other("internal error".into()));
     }
-    let product =
-        a.checked_mul(b).ok_or_else(|| PrecompileError::Other("internal error".into()))?;
+    let product = a.checked_mul(b).ok_or_else(|| PrecompileHalt::Other("internal error".into()))?;
     Ok(product / d)
 }
 
@@ -68,14 +67,13 @@ fn checked_mul_div_u256(a: U256, b: U256, d: U256) -> Result<U256, PrecompileErr
 /// undelegate, and other state-changing functions.
 pub trait StakingStorage: StorageReader {
     /// Write a U256 value to storage at the given key.
-    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError>;
+    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileHalt>;
 
     /// Transfer balance from one address to another.
-    fn transfer(&mut self, from: Address, to: Address, amount: U256)
-        -> Result<(), PrecompileError>;
+    fn transfer(&mut self, from: Address, to: Address, amount: U256) -> Result<(), PrecompileHalt>;
 
     /// Emit a log entry.
-    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError>;
+    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileHalt>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -86,7 +84,7 @@ fn write_storage_u256<S: StakingStorage>(
     s: &mut S,
     key: U256,
     value: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     s.sstore(key, value)
 }
 
@@ -95,7 +93,7 @@ fn write_storage_u64<S: StakingStorage>(
     s: &mut S,
     key: U256,
     value: u64,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let mut bytes = [0u8; 32];
     bytes[0..8].copy_from_slice(&value.to_be_bytes());
     s.sstore(key, U256::from_be_bytes(bytes))
@@ -105,26 +103,26 @@ fn write_storage_u64<S: StakingStorage>(
 // Storage Read Helpers (using StorageReader trait)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn read_u256<S: StorageReader>(s: &mut S, key: U256) -> Result<U256, PrecompileError> {
+fn read_u256<S: StorageReader>(s: &mut S, key: U256) -> Result<U256, PrecompileHalt> {
     s.sload(key)
 }
 
-fn read_u64<S: StorageReader>(s: &mut S, key: U256) -> Result<u64, PrecompileError> {
+fn read_u64<S: StorageReader>(s: &mut S, key: U256) -> Result<u64, PrecompileHalt> {
     let value = s.sload(key)?;
     let bytes = value.to_be_bytes::<32>();
     Ok(u64::from_be_bytes(bytes[0..8].try_into().unwrap()))
 }
 
-fn read_epoch<S: StorageReader>(s: &mut S) -> Result<u64, PrecompileError> {
+fn read_epoch<S: StorageReader>(s: &mut S) -> Result<u64, PrecompileHalt> {
     read_u64(s, global_slots::EPOCH)
 }
 
-fn read_in_boundary<S: StorageReader>(s: &mut S) -> Result<bool, PrecompileError> {
+fn read_in_boundary<S: StorageReader>(s: &mut S) -> Result<bool, PrecompileHalt> {
     let raw = read_u256(s, global_slots::IN_BOUNDARY)?;
     Ok(raw != U256::ZERO)
 }
 
-fn read_validator<S: StorageReader>(s: &mut S, val_id: u64) -> Result<Validator, PrecompileError> {
+fn read_validator<S: StorageReader>(s: &mut S, val_id: u64) -> Result<Validator, PrecompileHalt> {
     let stake = read_u256(s, validator_key(val_id, validator_offsets::STAKE))?;
     let accumulated_reward_per_token =
         read_u256(s, validator_key(val_id, validator_offsets::ACCUMULATED_REWARD_PER_TOKEN))?;
@@ -171,7 +169,7 @@ fn read_delegator<S: StorageReader>(
     s: &mut S,
     val_id: u64,
     addr: &Address,
-) -> Result<Delegator, PrecompileError> {
+) -> Result<Delegator, PrecompileHalt> {
     let stake = read_u256(s, delegator_key(val_id, addr, delegator_offsets::STAKE))?;
     let accumulated_reward_per_token =
         read_u256(s, delegator_key(val_id, addr, delegator_offsets::ACCUMULATED_REWARD_PER_TOKEN))?;
@@ -199,7 +197,7 @@ fn read_list_node<S: StorageReader>(
     s: &mut S,
     val_id: u64,
     addr: &Address,
-) -> Result<ListNode, PrecompileError> {
+) -> Result<ListNode, PrecompileHalt> {
     let slot6 = read_u256(s, delegator_key(val_id, addr, delegator_offsets::LIST_NODE))?
         .to_be_bytes::<32>();
     let slot7 = read_u256(s, delegator_key(val_id, addr, delegator_offsets::LIST_NODE + 1))?
@@ -211,7 +209,7 @@ fn read_accumulator<S: StorageReader>(
     s: &mut S,
     epoch: u64,
     val_id: u64,
-) -> Result<RefCountedAccumulator, PrecompileError> {
+) -> Result<RefCountedAccumulator, PrecompileHalt> {
     let value = read_u256(s, accumulator_key(epoch, val_id, 0))?;
     // Refcount is stored as u256 (right-aligned standard integer encoding)
     let refcount_u256 = read_u256(s, accumulator_key(epoch, val_id, 1))?;
@@ -227,7 +225,7 @@ fn write_validator_stake<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     stake: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, validator_key(val_id, validator_offsets::STAKE), stake)
 }
 
@@ -235,7 +233,7 @@ fn write_validator_acc<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     acc: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(
         s,
         validator_key(val_id, validator_offsets::ACCUMULATED_REWARD_PER_TOKEN),
@@ -247,7 +245,7 @@ fn write_validator_commission<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     commission: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, validator_key(val_id, validator_offsets::COMMISSION), commission)
 }
 
@@ -255,7 +253,7 @@ fn write_validator_unclaimed_rewards<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     rewards: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, validator_key(val_id, validator_offsets::UNCLAIMED_REWARDS), rewards)
 }
 
@@ -264,7 +262,7 @@ fn write_validator_flags<S: StakingStorage>(
     val_id: u64,
     val: &Validator,
     new_flags: u64,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     // Slot 6 packs auth_address (20 bytes) + flags (8 bytes) + padding (4 bytes)
     let mut slot6 = [0u8; 32];
     slot6[0..20].copy_from_slice(val.auth_address.as_slice());
@@ -280,7 +278,7 @@ fn write_validator_full<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     val: &Validator,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_validator_stake(s, val_id, val.stake)?;
     write_validator_acc(s, val_id, val.accumulated_reward_per_token)?;
     write_validator_commission(s, val_id, val.commission)?;
@@ -319,7 +317,7 @@ fn write_delegator<S: StakingStorage>(
     val_id: u64,
     addr: &Address,
     del: &Delegator,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, delegator_key(val_id, addr, delegator_offsets::STAKE), del.stake)?;
     write_storage_u256(
         s,
@@ -354,7 +352,7 @@ fn write_list_node<S: StakingStorage>(
     val_id: u64,
     addr: &Address,
     node: &ListNode,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let (slot6, slot7) = node.to_slots();
     write_storage_u256(
         s,
@@ -377,7 +375,7 @@ fn write_withdrawal_request<S: StakingStorage>(
     amount: U256,
     acc: U256,
     epoch: u64,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, withdrawal_key(val_id, addr, wid, withdrawal_offsets::AMOUNT), amount)?;
     write_storage_u256(s, withdrawal_key(val_id, addr, wid, withdrawal_offsets::ACCUMULATOR), acc)?;
     write_storage_u64(s, withdrawal_key(val_id, addr, wid, withdrawal_offsets::EPOCH), epoch)?;
@@ -389,7 +387,7 @@ fn clear_withdrawal_request<S: StakingStorage>(
     val_id: u64,
     addr: &Address,
     wid: u8,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(
         s,
         withdrawal_key(val_id, addr, wid, withdrawal_offsets::AMOUNT),
@@ -413,7 +411,7 @@ fn write_accumulator<S: StakingStorage>(
     epoch: u64,
     val_id: u64,
     acc: &RefCountedAccumulator,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     write_storage_u256(s, accumulator_key(epoch, val_id, 0), acc.value)?;
     // Refcount stored as u256 (right-aligned standard integer encoding)
     write_storage_u256(s, accumulator_key(epoch, val_id, 1), U256::from(acc.refcount))?;
@@ -427,7 +425,7 @@ fn write_accumulator<S: StakingStorage>(
 /// Get the activation epoch for new delegations.
 ///
 /// Returns `epoch + 1` normally, or `epoch + 2` if in the epoch delay period.
-fn get_activation_epoch<S: StorageReader>(s: &mut S) -> Result<u64, PrecompileError> {
+fn get_activation_epoch<S: StorageReader>(s: &mut S) -> Result<u64, PrecompileHalt> {
     let epoch = read_epoch(s)?;
     let in_boundary = read_in_boundary(s)?;
     Ok(if in_boundary { epoch + 2 } else { epoch + 1 })
@@ -441,11 +439,7 @@ const fn is_epoch_active(current_epoch: u64, active_epoch: u64) -> bool {
 /// Calculate rewards using the accumulator formula.
 ///
 /// `reward = (stake * (epoch_acc - last_acc)) / UNIT_BIAS`
-fn calculate_rewards(
-    stake: U256,
-    epoch_acc: U256,
-    last_acc: U256,
-) -> Result<U256, PrecompileError> {
+fn calculate_rewards(stake: U256, epoch_acc: U256, last_acc: U256) -> Result<U256, PrecompileHalt> {
     // Mirror C++ ordering exactly:
     // 1) checked_sub(current_acc, last_checked_acc)
     // 2) checked_mul_div(delta, stake, UNIT_BIAS)
@@ -459,7 +453,7 @@ fn calculate_rewards(
 fn increment_accumulator_refcount<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let epoch = get_activation_epoch(s)?;
     let mut acc = read_accumulator(s, epoch, val_id)?;
     acc.refcount += 1;
@@ -475,7 +469,7 @@ fn decrement_accumulator_refcount<S: StakingStorage>(
     s: &mut S,
     epoch: u64,
     val_id: u64,
-) -> Result<U256, PrecompileError> {
+) -> Result<U256, PrecompileHalt> {
     let mut acc = read_accumulator(s, epoch, val_id)?;
     let value = acc.value;
     if acc.refcount == 0 {
@@ -497,7 +491,7 @@ fn apply_compound<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     del: &mut Delegator,
-) -> Result<U256, PrecompileError> {
+) -> Result<U256, PrecompileHalt> {
     let epoch_acc = decrement_accumulator_refcount(s, del.delta_epoch, val_id)?;
     let rewards = calculate_rewards(del.stake, epoch_acc, del.accumulated_reward_per_token)?;
     del.accumulated_reward_per_token = epoch_acc;
@@ -522,7 +516,7 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     addr: &Address,
-) -> Result<Delegator, PrecompileError> {
+) -> Result<Delegator, PrecompileHalt> {
     let mut del = read_delegator(s, val_id, addr)?;
     let current_epoch = read_epoch(s)?;
 
@@ -553,7 +547,7 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         let rewards = apply_compound(s, val_id, &mut del)?;
         // reward_invariant: check solvency and deduct from unclaimed
         if unclaimed_rewards < rewards {
-            return Err(PrecompileError::Other("solvency error".into()));
+            return Err(PrecompileHalt::Other("solvency error".into()));
         }
         unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
         del.rewards = checked_add_u256(del.rewards, rewards)?;
@@ -564,7 +558,7 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         let rewards = apply_compound(s, val_id, &mut del)?;
         // reward_invariant: check solvency and deduct from unclaimed
         if unclaimed_rewards < rewards {
-            return Err(PrecompileError::Other("solvency error".into()));
+            return Err(PrecompileHalt::Other("solvency error".into()));
         }
         unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
         del.rewards = checked_add_u256(del.rewards, rewards)?;
@@ -577,7 +571,7 @@ fn pull_delegator_up_to_date<S: StakingStorage>(
         let rewards = calculate_rewards(del.stake, val_acc, del.accumulated_reward_per_token)?;
         // reward_invariant: check solvency and deduct from unclaimed
         if unclaimed_rewards < rewards {
-            return Err(PrecompileError::Other("solvency error".into()));
+            return Err(PrecompileHalt::Other("solvency error".into()));
         }
         unclaimed_rewards = checked_sub_u256(unclaimed_rewards, rewards)?;
         del.accumulated_reward_per_token = val_acc;
@@ -602,7 +596,7 @@ fn linked_list_insert<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     delegator: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     // Insert delegator into validator's list (key=val_id, ptr=delegator address)
     linked_list_insert_address(s, val_id, delegator)?;
     // Insert validator into delegator's list (key=delegator, ptr=val_id)
@@ -615,9 +609,9 @@ fn linked_list_insert_address<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     ptr: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     if *ptr == Address::ZERO || *ptr == ListNode::SENTINEL_ADDRESS {
-        return Err(PrecompileError::Other("invalid input".into()));
+        return Err(PrecompileHalt::Other("invalid input".into()));
     }
 
     let mut this_node = read_list_node(s, val_id, ptr)?;
@@ -649,9 +643,9 @@ fn linked_list_insert_val_id<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     delegator: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     if val_id == 0 || val_id == ListNode::SENTINEL_VAL_ID {
-        return Err(PrecompileError::Other("invalid input".into()));
+        return Err(PrecompileHalt::Other("invalid input".into()));
     }
 
     let mut this_node = read_list_node(s, val_id, delegator)?;
@@ -683,7 +677,7 @@ fn linked_list_remove<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     delegator: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     linked_list_remove_address(s, val_id, delegator)?;
     linked_list_remove_val_id(s, val_id, delegator)?;
     Ok(())
@@ -694,7 +688,7 @@ fn linked_list_remove_address<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     ptr: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let mut this_node = read_list_node(s, val_id, ptr)?;
     // If aprev == empty, not in list
     if this_node.aprev == Address::ZERO {
@@ -726,7 +720,7 @@ fn linked_list_remove_val_id<S: StakingStorage>(
     s: &mut S,
     val_id: u64,
     delegator: &Address,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let mut this_node = read_list_node(s, val_id, delegator)?;
     // If iprev == empty, not in list
     if this_node.iprev == 0 {
@@ -757,7 +751,7 @@ fn linked_list_remove_val_id<S: StakingStorage>(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Add a validator to the execution valset bitset. Returns true if newly inserted.
-fn add_to_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<bool, PrecompileError> {
+fn add_to_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<bool, PrecompileHalt> {
     let bucket_key = bitset_bucket_key(val_id);
     let set = read_u256(s, bucket_key)?;
     let bit = val_id & 0xFF;
@@ -776,7 +770,7 @@ fn add_to_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<bool, Prec
 }
 
 /// Remove a validator from the execution valset bitset.
-fn remove_from_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<(), PrecompileError> {
+fn remove_from_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<(), PrecompileHalt> {
     let bucket_key = bitset_bucket_key(val_id);
     let set = read_u256(s, bucket_key)?;
     let bit = val_id & 0xFF;
@@ -793,7 +787,7 @@ fn emit_event<S: StakingStorage>(
     s: &mut S,
     topics: Vec<B256>,
     data: Vec<u8>,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     s.emit_log(Log { address: STAKING_ADDRESS, data: LogData::new(topics, data.into()).unwrap() })
 }
 
@@ -808,7 +802,7 @@ fn update_validator_flags_after_delegate<S: StakingStorage>(
     val: &Validator,
     del: &Delegator,
     caller: &Address,
-) -> Result<u64, PrecompileError> {
+) -> Result<u64, PrecompileHalt> {
     let mut flags = val.flags;
 
     // Clear STAKE_TOO_LOW if total stake meets threshold
@@ -837,7 +831,7 @@ fn update_validator_flags_after_undelegate<S: StakingStorage>(
     val: &Validator,
     del: &Delegator,
     caller: &Address,
-) -> Result<u64, PrecompileError> {
+) -> Result<u64, PrecompileHalt> {
     let mut flags = val.flags;
 
     // Set STAKE_TOO_LOW if below threshold
@@ -868,7 +862,7 @@ fn internal_delegate<S: StakingStorage>(
     val_id: u64,
     caller: &Address,
     amount: U256,
-) -> Result<(), PrecompileError> {
+) -> Result<(), PrecompileHalt> {
     let mut del = pull_delegator_up_to_date(s, val_id, caller)?;
     let in_boundary = read_in_boundary(s)?;
     let activation_epoch = get_activation_epoch(s)?;
@@ -932,23 +926,23 @@ pub fn handle_change_commission<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::CHANGE_COMMISSION {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = changeCommissionCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let val = read_validator(s, call.validatorId)?;
     if !val.exists() {
-        return Err(PrecompileError::Other("unknown validator".into()));
+        return Err(PrecompileHalt::Other("unknown validator".into()));
     }
     if *caller != val.auth_address {
-        return Err(PrecompileError::Other("requires auth address".into()));
+        return Err(PrecompileHalt::Other("requires auth address".into()));
     }
     if call.commission > MAX_COMMISSION {
-        return Err(PrecompileError::Other("commission too high".into()));
+        return Err(PrecompileHalt::Other("commission too high".into()));
     }
 
     let old_commission = val.commission;
@@ -973,13 +967,13 @@ pub fn handle_claim_rewards<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::CLAIM_REWARDS {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = claimRewardsCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let mut del = pull_delegator_up_to_date(s, call.validatorId, caller)?;
 
@@ -1017,17 +1011,17 @@ pub fn handle_external_reward<S: StakingStorage>(
     gas_limit: u64,
     caller: &Address,
     call_value: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::EXTERNAL_REWARD {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = externalRewardCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let val = read_validator(s, call.validatorId)?;
     if !val.exists() {
-        return Err(PrecompileError::Other("unknown validator".into()));
+        return Err(PrecompileHalt::Other("unknown validator".into()));
     }
 
     // Get active stake from consensus/snapshot view
@@ -1039,14 +1033,14 @@ pub fn handle_external_reward<S: StakingStorage>(
     };
     let active_stake = read_u256(s, view_key)?;
     if active_stake.is_zero() {
-        return Err(PrecompileError::Other("not in validator set".into()));
+        return Err(PrecompileHalt::Other("not in validator set".into()));
     }
 
     if call_value < MIN_EXTERNAL_REWARD {
-        return Err(PrecompileError::Other("external reward too small".into()));
+        return Err(PrecompileHalt::Other("external reward too small".into()));
     }
     if call_value > MAX_EXTERNAL_REWARD {
-        return Err(PrecompileError::Other("external reward too large".into()));
+        return Err(PrecompileHalt::Other("external reward too large".into()));
     }
 
     // Apply reward: accumulator += (reward * UNIT_BIAS) / active_stake
@@ -1082,17 +1076,17 @@ pub fn handle_delegate<S: StakingStorage>(
     gas_limit: u64,
     caller: &Address,
     call_value: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::DELEGATE {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = delegateCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let val = read_validator(s, call.validatorId)?;
     if !val.exists() {
-        return Err(PrecompileError::Other("unknown validator".into()));
+        return Err(PrecompileHalt::Other("unknown validator".into()));
     }
     // Zero-value delegate is a success no-op
     if call_value.is_zero() {
@@ -1100,7 +1094,7 @@ pub fn handle_delegate<S: StakingStorage>(
         return Ok((gas::DELEGATE, encoded.into()));
     }
     if call_value < DUST_THRESHOLD {
-        return Err(PrecompileError::Other("delegation is too small".into()));
+        return Err(PrecompileHalt::Other("delegation is too small".into()));
     }
 
     internal_delegate(s, call.validatorId, caller, call_value)?;
@@ -1115,13 +1109,13 @@ pub fn handle_undelegate<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::UNDELEGATE {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = undelegateCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     // No-op for zero amount
     if call.amount.is_zero() {
@@ -1131,7 +1125,7 @@ pub fn handle_undelegate<S: StakingStorage>(
 
     let val = read_validator(s, call.validatorId)?;
     if !val.exists() {
-        return Err(PrecompileError::Other("unknown validator".into()));
+        return Err(PrecompileHalt::Other("unknown validator".into()));
     }
 
     // Check withdrawal ID doesn't exist
@@ -1140,7 +1134,7 @@ pub fn handle_undelegate<S: StakingStorage>(
         withdrawal_key(call.validatorId, caller, call.withdrawId, withdrawal_offsets::AMOUNT),
     )?;
     if !existing_wr.is_zero() {
-        return Err(PrecompileError::Other("withdrawal id exists".into()));
+        return Err(PrecompileHalt::Other("withdrawal id exists".into()));
     }
 
     // Pull delegator up to date
@@ -1149,7 +1143,7 @@ pub fn handle_undelegate<S: StakingStorage>(
     // Check sufficient stake
     let mut amount = call.amount;
     if del.stake < amount {
-        return Err(PrecompileError::Other("insufficient stake".into()));
+        return Err(PrecompileHalt::Other("insufficient stake".into()));
     }
 
     // Dust collection
@@ -1219,13 +1213,13 @@ pub fn handle_withdraw<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::WITHDRAW {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = withdrawCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     // Load withdrawal request
     let wr_amount = read_u256(
@@ -1233,7 +1227,7 @@ pub fn handle_withdraw<S: StakingStorage>(
         withdrawal_key(call.validatorId, caller, call.withdrawId, withdrawal_offsets::AMOUNT),
     )?;
     if wr_amount.is_zero() {
-        return Err(PrecompileError::Other("unknown withdrawal id".into()));
+        return Err(PrecompileHalt::Other("unknown withdrawal id".into()));
     }
     let wr_acc = read_u256(
         s,
@@ -1247,7 +1241,7 @@ pub fn handle_withdraw<S: StakingStorage>(
     // Check withdrawal ready
     let current_epoch = read_epoch(s)?;
     if !is_epoch_active(current_epoch, wr_epoch) || wr_epoch + WITHDRAWAL_DELAY > current_epoch {
-        return Err(PrecompileError::Other("withdrawal not ready".into()));
+        return Err(PrecompileHalt::Other("withdrawal not ready".into()));
     }
 
     // Decrement accumulator and calculate rewards
@@ -1257,7 +1251,7 @@ pub fn handle_withdraw<S: StakingStorage>(
     // Check solvency
     let val = read_validator(s, call.validatorId)?;
     if val.unclaimed_rewards < rewards {
-        return Err(PrecompileError::Other("solvency error".into()));
+        return Err(PrecompileHalt::Other("solvency error".into()));
     }
     write_validator_unclaimed_rewards(
         s,
@@ -1294,13 +1288,13 @@ pub fn handle_compound<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::COMPOUND {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = compoundCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let mut del = pull_delegator_up_to_date(s, call.validatorId, caller)?;
 
@@ -1338,18 +1332,18 @@ pub fn handle_add_validator<S: StakingStorage>(
     gas_limit: u64,
     _caller: &Address,
     call_value: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::ADD_VALIDATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = addValidatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     // Decode payload: secp_pubkey(33) + bls_pubkey(48) + auth_address(20) + signed_stake(32) + commission(32) = 165 bytes
     let payload = &call.payload;
     if payload.len() < 165 {
-        return Err(PrecompileError::Other("invalid input".into()));
+        return Err(PrecompileHalt::Other("invalid input".into()));
     }
 
     let mut secp_pubkey = [0u8; 33];
@@ -1362,13 +1356,13 @@ pub fn handle_add_validator<S: StakingStorage>(
 
     // Validate
     if call_value != signed_stake {
-        return Err(PrecompileError::Other("invalid input".into()));
+        return Err(PrecompileHalt::Other("invalid input".into()));
     }
     if call_value < MIN_AUTH_ADDRESS_STAKE {
-        return Err(PrecompileError::Other("insufficient stake".into()));
+        return Err(PrecompileHalt::Other("insufficient stake".into()));
     }
     if commission > MAX_COMMISSION {
-        return Err(PrecompileError::Other("commission too high".into()));
+        return Err(PrecompileHalt::Other("commission too high".into()));
     }
 
     // Skip signature verification (per design decision)
@@ -1382,11 +1376,11 @@ pub fn handle_add_validator<S: StakingStorage>(
     // Check validator doesn't already exist
     let existing_secp = read_u64(s, val_id_secp_key(&secp_addr))?;
     if existing_secp != 0 {
-        return Err(PrecompileError::Other("validator exists".into()));
+        return Err(PrecompileHalt::Other("validator exists".into()));
     }
     let existing_bls = read_u64(s, super::storage::val_id_bls_key(&bls_addr))?;
     if existing_bls != 0 {
-        return Err(PrecompileError::Other("validator exists".into()));
+        return Err(PrecompileHalt::Other("validator exists".into()));
     }
 
     // Increment last_val_id
@@ -1439,13 +1433,13 @@ pub fn handle_get_delegator_write<S: StakingStorage>(
     s: &mut S,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_DELEGATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     // pull_delegator_up_to_date persists settled state
     let del = pull_delegator_up_to_date(s, call.validatorId, &call.delegator)?;
@@ -1480,16 +1474,16 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     gas_limit: u64,
     caller: &Address,
     call_value: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::SYSCALL_REWARD {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     if *caller != SYSTEM_ADDRESS {
-        return Err(PrecompileError::Other("Unauthorized: not system address".into()));
+        return Err(PrecompileHalt::Other("Unauthorized: not system address".into()));
     }
 
     let call = syscallRewardCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let block_author = call.blockAuthor;
 
@@ -1503,7 +1497,7 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     let val_id = read_u64(s, val_id_secp_key(&block_author))?;
     if val_id == 0 {
         // Unknown author — return NotInValidatorSet error
-        return Err(PrecompileError::Other("not in validator set".into()));
+        return Err(PrecompileHalt::Other("not in validator set".into()));
     }
 
     // Get active stake from the appropriate view
@@ -1513,7 +1507,7 @@ pub fn handle_syscall_reward<S: StakingStorage>(
     let active_stake = read_u256(s, view_key)?;
     if active_stake.is_zero() {
         // Zero active stake — return NotInValidatorSet error
-        return Err(PrecompileError::Other("not in validator set".into()));
+        return Err(PrecompileHalt::Other("not in validator set".into()));
     }
 
     // Mint tokens: add block_reward to staking contract balance
@@ -1576,18 +1570,18 @@ pub fn handle_syscall_snapshot<S: StakingStorage>(
     _input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::SYSCALL_SNAPSHOT {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     if *caller != SYSTEM_ADDRESS {
-        return Err(PrecompileError::Other("Unauthorized: not system address".into()));
+        return Err(PrecompileHalt::Other("Unauthorized: not system address".into()));
     }
 
     // Check not already in boundary
     let in_boundary = read_in_boundary(s)?;
     if in_boundary {
-        return Err(PrecompileError::Other("called snapshot while in boundary".into()));
+        return Err(PrecompileHalt::Other("called snapshot while in boundary".into()));
     }
 
     // Set in_epoch_delay_period = true (left-aligned bool: byte 0 = 1)
@@ -1694,21 +1688,21 @@ pub fn handle_syscall_on_epoch_change<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     caller: &Address,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::SYSCALL_ON_EPOCH_CHANGE {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     if *caller != SYSTEM_ADDRESS {
-        return Err(PrecompileError::Other("Unauthorized: not system address".into()));
+        return Err(PrecompileHalt::Other("Unauthorized: not system address".into()));
     }
 
     let call = syscallOnEpochChangeCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let current_epoch = read_epoch(s)?;
     // Allow any strictly increasing epoch (next > last), not just +1
     if call.epoch <= current_epoch {
-        return Err(PrecompileError::Other("invalid epoch change".into()));
+        return Err(PrecompileHalt::Other("invalid epoch change".into()));
     }
 
     let next_epoch = call.epoch;
@@ -1806,9 +1800,9 @@ pub const fn is_write_selector(selector: [u8; 4]) -> bool {
 
 /// Check that msg.value is zero (non-payable method guard).
 /// Matches C++ `function_not_payable` which is called inside each non-payable method.
-fn function_not_payable(call_value: &U256) -> Result<(), PrecompileError> {
+fn function_not_payable(call_value: &U256) -> Result<(), PrecompileHalt> {
     if !call_value.is_zero() {
-        return Err(PrecompileError::Other("value non-zero".into()));
+        return Err(PrecompileHalt::Other("value non-zero".into()));
     }
     Ok(())
 }
@@ -1824,7 +1818,7 @@ fn fallback_result(gas_limit: u64) -> InterpreterResult {
         };
     }
     let mut gas = Gas::new(gas_limit);
-    let _ = gas.record_cost(gas_limit);
+    let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult {
         result: InstructionResult::Revert,
         output: Bytes::from("method not supported"),
@@ -1892,7 +1886,7 @@ pub fn run_staking_write<S: StakingStorage>(
                 gas: Gas::new(gas_limit),
                 output,
             };
-            if !ir.gas.record_cost(gas_used) {
+            if !ir.gas.record_regular_cost(gas_used) {
                 ir.result = InstructionResult::PrecompileOOG;
             }
             Ok(ir)
@@ -1900,7 +1894,7 @@ pub fn run_staking_write<S: StakingStorage>(
         Err(e) => {
             // Consume all gas on revert (gas_left = 0)
             let mut gas = Gas::new(gas_limit);
-            let _ = gas.record_cost(gas_limit);
+            let _ = gas.record_regular_cost(gas_limit);
             Ok(InterpreterResult {
                 result: if e.is_oog() {
                     InstructionResult::PrecompileOOG
@@ -1941,13 +1935,13 @@ mod tests {
     }
 
     impl StorageReader for MockStorage {
-        fn sload(&mut self, key: U256) -> Result<U256, PrecompileError> {
+        fn sload(&mut self, key: U256) -> Result<U256, PrecompileHalt> {
             Ok(self.slots.get(&key).copied().unwrap_or(U256::ZERO))
         }
     }
 
     impl StakingStorage for MockStorage {
-        fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError> {
+        fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileHalt> {
             self.slots.insert(key, value);
             Ok(())
         }
@@ -1957,12 +1951,12 @@ mod tests {
             from: Address,
             to: Address,
             amount: U256,
-        ) -> Result<(), PrecompileError> {
+        ) -> Result<(), PrecompileHalt> {
             self.transfers.push((from, to, amount));
             Ok(())
         }
 
-        fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError> {
+        fn emit_log(&mut self, log: Log) -> Result<(), PrecompileHalt> {
             self.logs.push(log);
             Ok(())
         }
