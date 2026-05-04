@@ -16,7 +16,7 @@ use revm::{
         Handler, MainnetHandler,
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
-    interpreter::{interpreter::EthInterpreter, interpreter_action::FrameInit},
+    interpreter::{interpreter::EthInterpreter, interpreter_action::FrameInit, InitialAndFloorGas},
     primitives::{hardfork::SpecId, U256},
 };
 
@@ -139,10 +139,14 @@ where
         validation::validate_tx_env(evm.ctx(), spec).map_err(Into::into)
     }
 
-    fn pre_execution(&self, evm: &mut Self::Evm) -> Result<u64, Self::Error> {
+    fn pre_execution(
+        &self,
+        evm: &mut Self::Evm,
+        init_and_floor_gas: &mut InitialAndFloorGas,
+    ) -> Result<u64, Self::Error> {
         validate_monad_against_state_and_deduct_caller::<_, Self::Error>(evm.ctx())?;
         self.load_accounts(evm)?;
-        let gas = self.apply_eip7702_auth_list(evm)?;
+        let gas = self.apply_eip7702_auth_list(evm, init_and_floor_gas)?;
 
         let sender = evm.ctx().tx().caller();
         let basefee = evm.ctx().block().basefee() as u128;
@@ -363,14 +367,14 @@ mod tests {
              Expected {}, got {}. Gas used was {}",
             expected_balance,
             caller_balance,
-            result.result.gas_used()
+            result.result.tx_gas_used()
         );
 
         // Verify gas_used < gas_limit (to confirm unused gas wasn't refunded)
         assert!(
-            result.result.gas_used() < gas_limit,
+            result.result.tx_gas_used() < gas_limit,
             "Gas used ({}) should be less than gas_limit ({})",
-            result.result.gas_used(),
+            result.result.tx_gas_used(),
             gas_limit
         );
     }
@@ -407,8 +411,13 @@ mod tests {
 
         // Verify refund is 0 (Monad disables refunds)
         match result.result {
-            ExecutionResult::Success { gas_refunded, .. } => {
-                assert_eq!(gas_refunded, 0, "Refund should be 0 on Monad, got {gas_refunded}");
+            ExecutionResult::Success { gas, .. } => {
+                assert_eq!(
+                    gas.inner_refunded(),
+                    0,
+                    "Refund should be 0 on Monad, got {}",
+                    gas.inner_refunded()
+                );
             }
             _ => panic!("Expected successful transaction"),
         }

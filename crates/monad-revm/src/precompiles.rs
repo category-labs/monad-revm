@@ -21,8 +21,8 @@ use revm::{
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInputs, InterpreterResult},
     precompile::{
-        bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileError, PrecompileId,
-        PrecompileOutput, PrecompileResult, Precompiles,
+        bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileHalt, PrecompileId,
+        PrecompileOutput, PrecompileResult, PrecompileStatus, Precompiles,
     },
     primitives::{alloy_primitives::B512, hardfork::SpecId, Address, Bytes, B256},
 };
@@ -58,18 +58,18 @@ pub const MONAD_POINT_EVALUATION_GAS: u64 = 200_000;
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Monad ecRecover precompile run function
-fn monad_ecrecover_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
+fn monad_ecrecover_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     use revm::precompile::{crypto, utilities::right_pad};
 
     if MONAD_ECRECOVER_GAS > gas_limit {
-        return Err(PrecompileError::OutOfGas);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
     }
 
     let input = right_pad::<128>(input);
 
     // `v` must be a 32-byte big-endian integer equal to 27 or 28.
     if !(input[32..63].iter().all(|&b| b == 0) && matches!(input[63], 27 | 28)) {
-        return Ok(PrecompileOutput::new(MONAD_ECRECOVER_GAS, Bytes::new()));
+        return Ok(PrecompileOutput::new(MONAD_ECRECOVER_GAS, Bytes::new(), reservoir));
     }
 
     let msg = <&B256>::try_from(&input[0..32]).unwrap();
@@ -78,46 +78,65 @@ fn monad_ecrecover_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
 
     let res = crypto().secp256k1_ecrecover(&sig.0, recid, &msg.0).ok();
     let out = res.map(|o| o.to_vec().into()).unwrap_or_default();
-    Ok(PrecompileOutput::new(MONAD_ECRECOVER_GAS, out))
+    Ok(PrecompileOutput::new(MONAD_ECRECOVER_GAS, out, reservoir))
 }
 
 /// Monad ecAdd precompile run function
-fn monad_ec_add_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
-    bn254::run_add(input, MONAD_EC_ADD_GAS, gas_limit)
+fn monad_ec_add_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+    Ok(PrecompileOutput::from_eth_result(
+        bn254::run_add(input, MONAD_EC_ADD_GAS, gas_limit),
+        reservoir,
+    ))
 }
 
 /// Monad ecMul precompile run function
-fn monad_ec_mul_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
-    bn254::run_mul(input, MONAD_EC_MUL_GAS, gas_limit)
+fn monad_ec_mul_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+    Ok(PrecompileOutput::from_eth_result(
+        bn254::run_mul(input, MONAD_EC_MUL_GAS, gas_limit),
+        reservoir,
+    ))
 }
 
 /// Monad ecPairing precompile run function
-fn monad_ec_pairing_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
-    bn254::run_pair(input, MONAD_EC_PAIRING_PER_POINT_GAS, MONAD_EC_PAIRING_BASE_GAS, gas_limit)
+fn monad_ec_pairing_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+    Ok(PrecompileOutput::from_eth_result(
+        bn254::run_pair(
+            input,
+            MONAD_EC_PAIRING_PER_POINT_GAS,
+            MONAD_EC_PAIRING_BASE_GAS,
+            gas_limit,
+        ),
+        reservoir,
+    ))
 }
 
 /// Monad blake2f precompile run function
-fn monad_blake2f_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
+fn monad_blake2f_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     use revm::precompile::crypto;
 
     const INPUT_LENGTH: usize = 213;
 
     if input.len() != INPUT_LENGTH {
-        return Err(PrecompileError::Blake2WrongLength);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::Blake2WrongLength, reservoir));
     }
 
     // Parse number of rounds (4 bytes)
     let rounds = u32::from_be_bytes(input[..4].try_into().unwrap());
     let gas_used = rounds as u64 * MONAD_BLAKE2F_ROUND_GAS;
     if gas_used > gas_limit {
-        return Err(PrecompileError::OutOfGas);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
     }
 
     // Parse final block flag
     let f = match input[212] {
         0 => false,
         1 => true,
-        _ => return Err(PrecompileError::Blake2WrongFinalIndicatorFlag),
+        _ => {
+            return Ok(PrecompileOutput::halt(
+                PrecompileHalt::Blake2WrongFinalIndicatorFlag,
+                reservoir,
+            ));
+        }
     };
 
     // Parse state vector h (8 × u64)
@@ -136,34 +155,34 @@ fn monad_blake2f_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
     let t_0 = u64::from_le_bytes(input[196..204].try_into().unwrap());
     let t_1 = u64::from_le_bytes(input[204..212].try_into().unwrap());
 
-    crypto().blake2_compress(rounds, &mut h, m, [t_0, t_1], f);
+    crypto().blake2_compress(rounds, &mut h, &m, &[t_0, t_1], f);
 
     let mut out = [0u8; 64];
     for (i, h) in (0..64).step_by(8).zip(h.iter()) {
         out[i..i + 8].copy_from_slice(&h.to_le_bytes());
     }
 
-    Ok(PrecompileOutput::new(gas_used, out.into()))
+    Ok(PrecompileOutput::new(gas_used, out.into(), reservoir))
 }
 
 /// Monad KZG point evaluation precompile run function
-fn monad_point_evaluation_run(input: &[u8], gas_limit: u64) -> PrecompileResult {
+fn monad_point_evaluation_run(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     use revm::precompile::crypto;
 
     if gas_limit < MONAD_POINT_EVALUATION_GAS {
-        return Err(PrecompileError::OutOfGas);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir));
     }
 
     // Verify input length.
     if input.len() != 192 {
-        return Err(PrecompileError::BlobInvalidInputLength);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::BlobInvalidInputLength, reservoir));
     }
 
     // Verify commitment matches versioned_hash
     let versioned_hash = &input[..32];
     let commitment = &input[96..144];
     if kzg_point_evaluation::kzg_to_versioned_hash(commitment) != versioned_hash {
-        return Err(PrecompileError::BlobMismatchedVersion);
+        return Ok(PrecompileOutput::halt(PrecompileHalt::BlobMismatchedVersion, reservoir));
     }
 
     // Verify KZG proof with z and y in big endian format
@@ -171,10 +190,16 @@ fn monad_point_evaluation_run(input: &[u8], gas_limit: u64) -> PrecompileResult 
     let z = input[32..64].try_into().unwrap();
     let y = input[64..96].try_into().unwrap();
     let proof = input[144..192].try_into().unwrap();
-    crypto().verify_kzg_proof(z, y, commitment, proof)?;
+    if let Err(halt) = crypto().verify_kzg_proof(z, y, commitment, proof) {
+        return Ok(PrecompileOutput::halt(halt, reservoir));
+    }
 
     // Return FIELD_ELEMENTS_PER_BLOB and BLS_MODULUS as padded 32 byte big endian values
-    Ok(PrecompileOutput::new(MONAD_POINT_EVALUATION_GAS, kzg_point_evaluation::RETURN_VALUE.into()))
+    Ok(PrecompileOutput::new(
+        MONAD_POINT_EVALUATION_GAS,
+        kzg_point_evaluation::RETURN_VALUE.into(),
+        reservoir,
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -323,7 +348,7 @@ impl Default for MonadPrecompiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revm::precompile::{self, PrecompileError};
+    use revm::precompile::{self, PrecompileHalt};
     use revm::primitives::{hex, U256};
 
     fn modexp_input(base: &[u8], exponent: &[u8], modulus: &[u8]) -> Vec<u8> {
@@ -473,7 +498,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit
-        let result = precompile.execute(&input, 100_000).expect("ecAdd should succeed");
+        let result = precompile.execute(&input, 100_000, 0).expect("ecAdd should succeed");
 
         // Verify Monad gas cost is used (300, not Ethereum's 150)
         assert_eq!(result.gas_used, MONAD_EC_ADD_GAS, "ecAdd should use Monad gas cost of 300");
@@ -499,7 +524,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit
-        let result = precompile.execute(&input, 100_000).expect("ecMul should succeed");
+        let result = precompile.execute(&input, 100_000, 0).expect("ecMul should succeed");
 
         // Verify Monad gas cost is used (30000, not Ethereum's 6000)
         assert_eq!(result.gas_used, MONAD_EC_MUL_GAS, "ecMul should use Monad gas cost of 30000");
@@ -526,7 +551,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit
-        let result = precompile.execute(&input, 100_000).expect("ecRecover should succeed");
+        let result = precompile.execute(&input, 100_000, 0).expect("ecRecover should succeed");
 
         // Verify Monad gas cost is used (6000, not Ethereum's 3000)
         assert_eq!(
@@ -558,7 +583,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit (1 point = base + per_point = 225000 + 170000 = 395000)
-        let result = precompile.execute(&input, 500_000).expect("ecPairing should succeed");
+        let result = precompile.execute(&input, 500_000, 0).expect("ecPairing should succeed");
 
         // Verify Monad gas cost is used (225000 base + 170000 per point = 395000)
         let expected_gas = MONAD_EC_PAIRING_BASE_GAS + MONAD_EC_PAIRING_PER_POINT_GAS;
@@ -593,7 +618,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit (12 rounds × 2 = 24 gas)
-        let result = precompile.execute(&input, 100).expect("blake2f should succeed");
+        let result = precompile.execute(&input, 100, 0).expect("blake2f should succeed");
 
         // Verify Monad gas cost is used (rounds × 2)
         let expected_gas = 12 * MONAD_BLAKE2F_ROUND_GAS;
@@ -627,7 +652,7 @@ mod tests {
         .unwrap();
 
         // Execute with high gas limit
-        let result = precompile.execute(&input, 10_000).expect("P256VERIFY should succeed");
+        let result = precompile.execute(&input, 10_000, 0).expect("P256VERIFY should succeed");
 
         // Verify Osaka gas cost is used (6900, matching C++ client)
         assert_eq!(
@@ -642,16 +667,23 @@ mod tests {
         let oversized_input = modexp_input(&vec![0u8; 1025], &[0x01], &[0x01]);
 
         let monad_eight_result =
-            modexp_precompile(MonadSpecId::MonadEight).execute(&oversized_input, 100_000_000);
+            modexp_precompile(MonadSpecId::MonadEight).execute(&oversized_input, 100_000_000, 0);
         assert!(
             monad_eight_result.is_ok(),
             "MonadEight should not apply the Osaka MODEXP size limit"
         );
 
         let monad_nine_result =
-            modexp_precompile(MonadSpecId::MonadNine).execute(&oversized_input, 100_000_000);
+            modexp_precompile(MonadSpecId::MonadNine).execute(&oversized_input, 100_000_000, 0);
         assert!(
-            matches!(monad_nine_result, Err(PrecompileError::ModexpEip7823LimitSize)),
+            matches!(
+                monad_nine_result,
+                Ok(ref output)
+                    if matches!(
+                        output.status,
+                        PrecompileStatus::Halt(PrecompileHalt::ModexpEip7823LimitSize)
+                    )
+            ),
             "MonadNine should reject oversized MODEXP input, got {monad_nine_result:?}"
         );
     }
@@ -666,10 +698,10 @@ mod tests {
         );
 
         let monad_eight_result = modexp_precompile(MonadSpecId::MonadEight)
-            .execute(&input, 10_000_000)
+            .execute(&input, 10_000_000, 0)
             .expect("MonadEight MODEXP should succeed");
         let monad_nine_result = modexp_precompile(MonadSpecId::MonadNine)
-            .execute(&input, 10_000_000)
+            .execute(&input, 10_000_000, 0)
             .expect("MonadNine MODEXP should succeed");
 
         assert_eq!(

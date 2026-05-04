@@ -444,6 +444,7 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
             value,
             code,
             gas_limit,
+            context.interpreter.gas.reservoir(),
         )),
     )));
 }
@@ -485,11 +486,12 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             target_address: to,
             caller: context.interpreter.input.target_address(),
             bytecode_address: to,
-            known_bytecode: Some((bytecode_hash, bytecode)),
+            known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(value),
             scheme: CallScheme::Call,
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
+            reservoir: context.interpreter.gas.reservoir(),
         }),
     )));
 }
@@ -522,11 +524,12 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.target_address(),
             bytecode_address: to,
-            known_bytecode: Some((bytecode_hash, bytecode)),
+            known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(value),
             scheme: CallScheme::CallCode,
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
+            reservoir: context.interpreter.gas.reservoir(),
         }),
     )));
 }
@@ -559,11 +562,12 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.caller_address(),
             bytecode_address: to,
-            known_bytecode: Some((bytecode_hash, bytecode)),
+            known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Apparent(context.interpreter.input.call_value()),
             scheme: CallScheme::DelegateCall,
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
+            reservoir: context.interpreter.gas.reservoir(),
         }),
     )));
 }
@@ -596,11 +600,12 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             target_address: to,
             caller: context.interpreter.input.target_address(),
             bytecode_address: to,
-            known_bytecode: Some((bytecode_hash, bytecode)),
+            known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(U256::ZERO),
             scheme: CallScheme::StaticCall,
             is_static: true,
             return_memory_offset,
+            reservoir: context.interpreter.gas.reservoir(),
         }),
     )));
 }

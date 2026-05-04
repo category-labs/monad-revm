@@ -64,7 +64,7 @@ fn monad_resize_memory_cold<Memory: MemoryTr>(
     let delta =
         unsafe { gas.memory_mut().set_words_num(new_num_words, total_cost).unwrap_unchecked() };
 
-    if !gas.record_cost(delta) {
+    if !gas.record_regular_cost(delta) {
         return Err(InstructionResult::MemoryOOG);
     }
     memory.resize(new_num_words * 32);

@@ -35,7 +35,7 @@ use interface::IMonadStaking::*;
 use revm::{
     context_interface::{ContextTr, JournalTr, LocalContextTr},
     interpreter::{CallInputs, CallScheme, Gas, InstructionResult, InterpreterResult},
-    precompile::PrecompileError,
+    precompile::PrecompileHalt,
     primitives::{Address, Bytes, Log, U256},
 };
 use storage::{
@@ -141,7 +141,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
                 gas: Gas::new(inputs.gas_limit),
                 output,
             };
-            if !interpreter_result.gas.record_cost(gas_used) {
+            if !interpreter_result.gas.record_regular_cost(gas_used) {
                 interpreter_result.result = InstructionResult::PrecompileOOG;
             }
             Ok(Some(interpreter_result))
@@ -149,7 +149,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
         Err(e) => {
             // C++ returns EVMC_REVERT with gas_left=0 (consumes all gas on revert)
             let mut gas = Gas::new(inputs.gas_limit);
-            let _ = gas.record_cost(inputs.gas_limit);
+            let _ = gas.record_regular_cost(inputs.gas_limit);
             Ok(Some(InterpreterResult {
                 result: if e.is_oog() {
                     InstructionResult::PrecompileOOG
@@ -168,9 +168,9 @@ fn handle_get_epoch<CTX: ContextTr>(
     context: &mut CTX,
     _input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_EPOCH {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let epoch_info = read_epoch_info(context)?;
@@ -187,9 +187,9 @@ fn handle_get_proposer_val_id<CTX: ContextTr>(
     context: &mut CTX,
     _input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_PROPOSER_VAL_ID {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let val_id = read_storage_u64(context, global_slots::PROPOSER_VAL_ID)?;
@@ -203,13 +203,13 @@ fn handle_get_validator<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_VALIDATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getValidatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let val_id = call.validatorId;
 
     let validator = read_validator(context, val_id)?;
@@ -242,13 +242,13 @@ fn handle_get_delegator<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_DELEGATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let delegator = read_delegator(context, call.validatorId, &call.delegator)?;
 
@@ -269,13 +269,13 @@ fn handle_get_withdrawal_request<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_WITHDRAWAL_REQUEST {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getWithdrawalRequestCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let request =
         read_withdrawal_request(context, call.validatorId, &call.delegator, call.withdrawId)?;
@@ -296,7 +296,7 @@ fn handle_get_consensus_validator_set<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     handle_get_validator_set_impl(context, input, gas_limit, valset_slots::CONSENSUS)
 }
 
@@ -305,7 +305,7 @@ fn handle_get_snapshot_validator_set<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     handle_get_validator_set_impl(context, input, gas_limit, valset_slots::SNAPSHOT)
 }
 
@@ -314,7 +314,7 @@ fn handle_get_execution_validator_set<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     handle_get_validator_set_impl(context, input, gas_limit, valset_slots::EXECUTION)
 }
 
@@ -328,16 +328,16 @@ fn handle_get_validator_set_impl<CTX: ContextTr>(
     input: &[u8],
     gas_limit: u64,
     base_slot: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     // Flat gas cost for all validator set getters (C++ static_assert: 814,000)
     let gas_cost = gas::GET_CONSENSUS_VALIDATOR_SET;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     // Decode start_index from input
     let call = getConsensusValidatorSetCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let start_index = call.startIndex;
 
     // Read array length from base slot
@@ -384,14 +384,14 @@ fn handle_get_delegations<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     let gas_cost = gas::GET_DELEGATIONS;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegationsCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let (done, next_val_id, val_ids) = traverse_validators_for_delegator(
         context,
@@ -416,14 +416,14 @@ fn handle_get_delegators<CTX: ContextTr>(
     context: &mut CTX,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     let gas_cost = gas::GET_DELEGATORS;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegatorsCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let (done, next_delegator, delegators) = traverse_delegators_for_validator(
         context,
@@ -445,7 +445,7 @@ fn read_list_node<CTX: ContextTr>(
     context: &mut CTX,
     val_id: u64,
     delegator_addr: &Address,
-) -> Result<ListNode, PrecompileError> {
+) -> Result<ListNode, PrecompileHalt> {
     let slot6 = read_storage_u256(
         context,
         delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE),
@@ -468,7 +468,7 @@ fn traverse_validators_for_delegator<CTX: ContextTr>(
     delegator: &Address,
     start_val_id: u64,
     limit: u32,
-) -> Result<(bool, u64, Vec<u64>), PrecompileError> {
+) -> Result<(bool, u64, Vec<u64>), PrecompileHalt> {
     // Determine starting pointer
     let ptr = if start_val_id == 0 {
         // Start from head: load sentinel node and follow its inext
@@ -518,7 +518,7 @@ fn traverse_delegators_for_validator<CTX: ContextTr>(
     val_id: u64,
     start_delegator: &Address,
     limit: u32,
-) -> Result<(bool, Address, Vec<Address>), PrecompileError> {
+) -> Result<(bool, Address, Vec<Address>), PrecompileHalt> {
     // Determine starting pointer
     let ptr = if *start_delegator == Address::ZERO {
         // Start from head: load sentinel node and follow its anext
@@ -564,7 +564,7 @@ fn traverse_delegators_for_validator<CTX: ContextTr>(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Read epoch info from storage.
-fn read_epoch_info<CTX: ContextTr>(context: &mut CTX) -> Result<EpochInfo, PrecompileError> {
+fn read_epoch_info<CTX: ContextTr>(context: &mut CTX) -> Result<EpochInfo, PrecompileHalt> {
     let epoch = read_storage_u64(context, global_slots::EPOCH)?;
     let in_delay_raw = read_storage_u256(context, global_slots::IN_BOUNDARY)?;
     let in_delay_period = in_delay_raw != U256::ZERO;
@@ -576,7 +576,7 @@ fn read_epoch_info<CTX: ContextTr>(context: &mut CTX) -> Result<EpochInfo, Preco
 fn read_validator<CTX: ContextTr>(
     context: &mut CTX,
     val_id: u64,
-) -> Result<Validator, PrecompileError> {
+) -> Result<Validator, PrecompileHalt> {
     // Read all 8 slots
     let stake = read_storage_u256(context, validator_key(val_id, validator_offsets::STAKE))?;
     let accumulated_reward_per_token = read_storage_u256(
@@ -637,7 +637,7 @@ fn read_delegator<CTX: ContextTr>(
     context: &mut CTX,
     val_id: u64,
     delegator_addr: &Address,
-) -> Result<Delegator, PrecompileError> {
+) -> Result<Delegator, PrecompileHalt> {
     let stake = read_storage_u256(
         context,
         delegator_key(val_id, delegator_addr, delegator_offsets::STAKE),
@@ -686,7 +686,7 @@ fn read_withdrawal_request<CTX: ContextTr>(
     val_id: u64,
     delegator_addr: &Address,
     withdrawal_id: u8,
-) -> Result<WithdrawalRequest, PrecompileError> {
+) -> Result<WithdrawalRequest, PrecompileHalt> {
     let amount = read_storage_u256(
         context,
         withdrawal_key(val_id, delegator_addr, withdrawal_id, withdrawal_offsets::AMOUNT),
@@ -708,19 +708,16 @@ fn read_withdrawal_request<CTX: ContextTr>(
 }
 
 /// Read a U256 from storage.
-fn read_storage_u256<CTX: ContextTr>(
-    context: &mut CTX,
-    key: U256,
-) -> Result<U256, PrecompileError> {
+fn read_storage_u256<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<U256, PrecompileHalt> {
     context
         .journal_mut()
         .sload(STAKING_ADDRESS, key)
         .map(|r| r.data)
-        .map_err(|e| PrecompileError::Other(format!("Storage read failed: {e:?}").into()))
+        .map_err(|e| PrecompileHalt::Other(format!("Storage read failed: {e:?}").into()))
 }
 
 /// Read a u64 from storage (stored left-aligned in big-endian format).
-fn read_storage_u64<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<u64, PrecompileError> {
+fn read_storage_u64<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<u64, PrecompileHalt> {
     let value = read_storage_u256(context, key)?;
     // Monad stores u64 values left-aligned (big-endian in first 8 bytes of slot)
     let bytes = value.to_be_bytes::<32>();
@@ -737,7 +734,7 @@ fn read_storage_u64<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<u64,
 /// such as Foundry's `PrecompileInput` interface which uses `EvmInternals.sload()`.
 pub trait StorageReader {
     /// Read a U256 value from storage at the given key.
-    fn sload(&mut self, key: U256) -> Result<U256, PrecompileError>;
+    fn sload(&mut self, key: U256) -> Result<U256, PrecompileHalt>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -751,41 +748,36 @@ struct ContextTrStorage<'a, CTX: ContextTr> {
 }
 
 impl<CTX: ContextTr> StorageReader for ContextTrStorage<'_, CTX> {
-    fn sload(&mut self, key: U256) -> Result<U256, PrecompileError> {
+    fn sload(&mut self, key: U256) -> Result<U256, PrecompileHalt> {
         self.context
             .journal_mut()
             .sload(STAKING_ADDRESS, key)
             .map(|r| r.data)
-            .map_err(|e| PrecompileError::Other(format!("Storage read failed: {e:?}").into()))
+            .map_err(|e| PrecompileHalt::Other(format!("Storage read failed: {e:?}").into()))
     }
 }
 
 impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
-    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileError> {
+    fn sstore(&mut self, key: U256, value: U256) -> Result<(), PrecompileHalt> {
         self.context
             .journal_mut()
             .sstore(STAKING_ADDRESS, key, value)
             .map(|_| ())
-            .map_err(|e| PrecompileError::Other(format!("Storage write failed: {e:?}").into()))
+            .map_err(|e| PrecompileHalt::Other(format!("Storage write failed: {e:?}").into()))
     }
 
-    fn transfer(
-        &mut self,
-        from: Address,
-        to: Address,
-        amount: U256,
-    ) -> Result<(), PrecompileError> {
+    fn transfer(&mut self, from: Address, to: Address, amount: U256) -> Result<(), PrecompileHalt> {
         if amount.is_zero() {
             return Ok(());
         }
         match self.context.journal_mut().transfer(from, to, amount) {
             Ok(None) => Ok(()),
-            Ok(Some(e)) => Err(PrecompileError::Other(format!("Transfer failed: {e:?}").into())),
-            Err(e) => Err(PrecompileError::Other(format!("Transfer error: {e:?}").into())),
+            Ok(Some(e)) => Err(PrecompileHalt::Other(format!("Transfer failed: {e:?}").into())),
+            Err(e) => Err(PrecompileHalt::Other(format!("Transfer error: {e:?}").into())),
         }
     }
 
-    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileError> {
+    fn emit_log(&mut self, log: Log) -> Result<(), PrecompileHalt> {
         self.context.journal_mut().log(log);
         Ok(())
     }
@@ -858,7 +850,7 @@ pub fn run_staking_with_reader<R: StorageReader>(
                 gas: Gas::new(gas_limit),
                 output,
             };
-            if !interpreter_result.gas.record_cost(gas_used) {
+            if !interpreter_result.gas.record_regular_cost(gas_used) {
                 interpreter_result.result = InstructionResult::PrecompileOOG;
             }
             Ok(interpreter_result)
@@ -866,7 +858,7 @@ pub fn run_staking_with_reader<R: StorageReader>(
         Err(e) => {
             // C++ returns EVMC_REVERT with gas_left=0 (consumes all gas on revert)
             let mut gas = Gas::new(gas_limit);
-            let _ = gas.record_cost(gas_limit);
+            let _ = gas.record_regular_cost(gas_limit);
             Ok(InterpreterResult {
                 result: if e.is_oog() {
                     InstructionResult::PrecompileOOG
@@ -890,7 +882,7 @@ fn reader_fallback_result(gas_limit: u64) -> InterpreterResult {
         };
     }
     let mut gas = Gas::new(gas_limit);
-    let _ = gas.record_cost(gas_limit);
+    let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult {
         result: InstructionResult::Revert,
         output: Bytes::from("method not supported"),
@@ -899,9 +891,9 @@ fn reader_fallback_result(gas_limit: u64) -> InterpreterResult {
 }
 
 /// Check that msg.value is zero (non-payable method guard).
-fn function_not_payable(call_value: &U256) -> Result<(), PrecompileError> {
+fn function_not_payable(call_value: &U256) -> Result<(), PrecompileHalt> {
     if !call_value.is_zero() {
-        return Err(PrecompileError::Other("value non-zero".into()));
+        return Err(PrecompileHalt::Other("value non-zero".into()));
     }
     Ok(())
 }
@@ -914,9 +906,9 @@ fn handle_get_epoch_reader<R: StorageReader>(
     reader: &mut R,
     _input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_EPOCH {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     let epoch_info = read_epoch_info_reader(reader)?;
     let encoded = getEpochCall::abi_encode_returns(&getEpochReturn {
@@ -929,9 +921,9 @@ fn handle_get_epoch_reader<R: StorageReader>(
 fn handle_get_proposer_val_id_reader<R: StorageReader>(
     reader: &mut R,
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_PROPOSER_VAL_ID {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     let val_id = read_storage_u64_reader(reader, global_slots::PROPOSER_VAL_ID)?;
     let encoded = getProposerValIdCall::abi_encode_returns(&val_id);
@@ -942,12 +934,12 @@ fn handle_get_validator_reader<R: StorageReader>(
     reader: &mut R,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_VALIDATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     let call = getValidatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let val_id = call.validatorId;
     let validator = read_validator_reader(reader, val_id)?;
 
@@ -980,12 +972,12 @@ fn handle_get_delegator_reader<R: StorageReader>(
     reader: &mut R,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_DELEGATOR {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     let call = getDelegatorCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let delegator = read_delegator_reader(reader, call.validatorId, &call.delegator)?;
     let encoded = getDelegatorCall::abi_encode_returns(&getDelegatorReturn {
         stake: delegator.stake,
@@ -1003,12 +995,12 @@ fn handle_get_withdrawal_request_reader<R: StorageReader>(
     reader: &mut R,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     if gas_limit < gas::GET_WITHDRAWAL_REQUEST {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
     let call = getWithdrawalRequestCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let withdrawal =
         read_withdrawal_request_reader(reader, call.validatorId, &call.delegator, call.withdrawId)?;
     let encoded = getWithdrawalRequestCall::abi_encode_returns(&getWithdrawalRequestReturn {
@@ -1025,15 +1017,15 @@ fn handle_get_validator_set_reader<R: StorageReader>(
     input: &[u8],
     gas_limit: u64,
     base_slot: U256,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     // Flat gas cost for all validator set getters (C++ static_assert: 814,000)
     let gas_cost = gas::GET_CONSENSUS_VALIDATOR_SET;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getConsensusValidatorSetCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
     let start_index = call.startIndex;
 
     // Read array length from base slot
@@ -1069,7 +1061,7 @@ fn handle_get_validator_set_reader<R: StorageReader>(
 // Reader-based storage functions
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn read_epoch_info_reader<R: StorageReader>(reader: &mut R) -> Result<EpochInfo, PrecompileError> {
+fn read_epoch_info_reader<R: StorageReader>(reader: &mut R) -> Result<EpochInfo, PrecompileHalt> {
     let epoch = read_storage_u64_reader(reader, global_slots::EPOCH)?;
     let in_delay_raw = read_storage_u256_reader(reader, global_slots::IN_BOUNDARY)?;
     let in_delay_period = in_delay_raw != U256::ZERO;
@@ -1079,7 +1071,7 @@ fn read_epoch_info_reader<R: StorageReader>(reader: &mut R) -> Result<EpochInfo,
 fn read_validator_reader<R: StorageReader>(
     reader: &mut R,
     val_id: u64,
-) -> Result<Validator, PrecompileError> {
+) -> Result<Validator, PrecompileHalt> {
     let stake = read_storage_u256_reader(reader, validator_key(val_id, validator_offsets::STAKE))?;
     let accumulated_reward_per_token = read_storage_u256_reader(
         reader,
@@ -1135,7 +1127,7 @@ fn read_delegator_reader<R: StorageReader>(
     reader: &mut R,
     val_id: u64,
     delegator_addr: &Address,
-) -> Result<Delegator, PrecompileError> {
+) -> Result<Delegator, PrecompileHalt> {
     let stake = read_storage_u256_reader(
         reader,
         delegator_key(val_id, delegator_addr, delegator_offsets::STAKE),
@@ -1181,7 +1173,7 @@ fn read_withdrawal_request_reader<R: StorageReader>(
     val_id: u64,
     delegator_addr: &Address,
     withdrawal_id: u8,
-) -> Result<WithdrawalRequest, PrecompileError> {
+) -> Result<WithdrawalRequest, PrecompileHalt> {
     let amount = read_storage_u256_reader(
         reader,
         withdrawal_key(val_id, delegator_addr, withdrawal_id, withdrawal_offsets::AMOUNT),
@@ -1204,14 +1196,14 @@ fn read_withdrawal_request_reader<R: StorageReader>(
 fn read_storage_u256_reader<R: StorageReader>(
     reader: &mut R,
     key: U256,
-) -> Result<U256, PrecompileError> {
+) -> Result<U256, PrecompileHalt> {
     reader.sload(key)
 }
 
 fn read_storage_u64_reader<R: StorageReader>(
     reader: &mut R,
     key: U256,
-) -> Result<u64, PrecompileError> {
+) -> Result<u64, PrecompileHalt> {
     let value = read_storage_u256_reader(reader, key)?;
     // Monad stores u64 values left-aligned (big-endian in first 8 bytes of slot)
     let bytes = value.to_be_bytes::<32>();
@@ -1226,14 +1218,14 @@ fn handle_get_delegations_reader<R: StorageReader>(
     reader: &mut R,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     let gas_cost = gas::GET_DELEGATIONS;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegationsCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let (done, next_val_id, val_ids) = traverse_validators_for_delegator_reader(
         reader,
@@ -1254,14 +1246,14 @@ fn handle_get_delegators_reader<R: StorageReader>(
     reader: &mut R,
     input: &[u8],
     gas_limit: u64,
-) -> Result<(u64, Bytes), PrecompileError> {
+) -> Result<(u64, Bytes), PrecompileHalt> {
     let gas_cost = gas::GET_DELEGATORS;
     if gas_limit < gas_cost {
-        return Err(PrecompileError::OutOfGas);
+        return Err(PrecompileHalt::OutOfGas);
     }
 
     let call = getDelegatorsCall::abi_decode_raw(&input[4..])
-        .map_err(|e| PrecompileError::Other(format!("Invalid input: {e}").into()))?;
+        .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
     let (done, next_delegator, delegators) = traverse_delegators_for_validator_reader(
         reader,
@@ -1282,7 +1274,7 @@ fn read_list_node_reader<R: StorageReader>(
     reader: &mut R,
     val_id: u64,
     delegator_addr: &Address,
-) -> Result<ListNode, PrecompileError> {
+) -> Result<ListNode, PrecompileHalt> {
     let slot6 = read_storage_u256_reader(
         reader,
         delegator_key(val_id, delegator_addr, delegator_offsets::LIST_NODE),
@@ -1301,7 +1293,7 @@ fn traverse_validators_for_delegator_reader<R: StorageReader>(
     delegator: &Address,
     start_val_id: u64,
     limit: u32,
-) -> Result<(bool, u64, Vec<u64>), PrecompileError> {
+) -> Result<(bool, u64, Vec<u64>), PrecompileHalt> {
     let ptr = if start_val_id == 0 {
         let sentinel = read_list_node_reader(reader, ListNode::SENTINEL_VAL_ID, delegator)?;
         sentinel.inext
@@ -1343,7 +1335,7 @@ fn traverse_delegators_for_validator_reader<R: StorageReader>(
     val_id: u64,
     start_delegator: &Address,
     limit: u32,
-) -> Result<(bool, Address, Vec<Address>), PrecompileError> {
+) -> Result<(bool, Address, Vec<Address>), PrecompileHalt> {
     let ptr = if *start_delegator == Address::ZERO {
         let sentinel = read_list_node_reader(reader, val_id, &ListNode::SENTINEL_ADDRESS)?;
         sentinel.anext
@@ -1385,8 +1377,10 @@ mod tests {
     use super::*;
     use crate::DefaultMonad;
     use revm::{
+        bytecode::Bytecode,
         database::InMemoryDB,
         interpreter::{CallInput, CallValue},
+        primitives::B256,
     };
 
     /// Helper to build a CallInputs targeting the staking precompile.
@@ -1400,8 +1394,9 @@ mod tests {
             input: CallInput::Bytes(input),
             return_memory_offset: 0..0,
             gas_limit: 100_000,
+            reservoir: 0,
             bytecode_address: STAKING_ADDRESS,
-            known_bytecode: None,
+            known_bytecode: (B256::ZERO, Bytecode::default()),
             target_address: STAKING_ADDRESS,
             caller: Address::ZERO,
             value,
@@ -1460,7 +1455,7 @@ mod tests {
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
         assert_eq!(result.gas.remaining(), 0);
-        assert_eq!(result.gas.spent(), inputs.gas_limit);
+        assert_eq!(result.gas.total_gas_spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1472,7 +1467,7 @@ mod tests {
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
         assert_eq!(result.gas.remaining(), 0);
-        assert_eq!(result.gas.spent(), inputs.gas_limit);
+        assert_eq!(result.gas.total_gas_spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1484,7 +1479,7 @@ mod tests {
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
         assert_eq!(result.gas.remaining(), 0);
-        assert_eq!(result.gas.spent(), inputs.gas_limit);
+        assert_eq!(result.gas.total_gas_spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1499,7 +1494,7 @@ mod tests {
         let result = result.expect("should return Some for staking address");
         assert_eq!(result.result, InstructionResult::Revert);
         assert_eq!(result.gas.remaining(), 0);
-        assert_eq!(result.gas.spent(), inputs.gas_limit);
+        assert_eq!(result.gas.total_gas_spent(), inputs.gas_limit);
     }
 
     #[test]
@@ -1532,7 +1527,7 @@ mod tests {
     fn test_reader_unknown_selector_with_nonzero_value_hits_fallback() {
         struct EmptyReader;
         impl StorageReader for EmptyReader {
-            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileError> {
+            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileHalt> {
                 Ok(U256::ZERO)
             }
         }
@@ -1550,7 +1545,7 @@ mod tests {
     fn test_reader_known_getter_with_nonzero_value_reverts_value_non_zero() {
         struct EmptyReader;
         impl StorageReader for EmptyReader {
-            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileError> {
+            fn sload(&mut self, _key: U256) -> Result<U256, PrecompileHalt> {
                 Ok(U256::ZERO)
             }
         }

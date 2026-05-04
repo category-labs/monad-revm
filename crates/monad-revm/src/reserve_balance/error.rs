@@ -1,7 +1,7 @@
 //! Reserve-balance precompile errors.
 
 use core::fmt;
-use revm::precompile::PrecompileError;
+use revm::precompile::PrecompileHalt;
 
 /// Reserve-balance precompile errors.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,11 +16,11 @@ pub enum ReserveBalanceError {
 
 impl ReserveBalanceError {
     /// Converts the error into a precompile error.
-    pub fn into_precompile_error(self) -> PrecompileError {
+    pub fn into_precompile_error(self) -> PrecompileHalt {
         match self {
-            Self::MethodNotSupported => PrecompileError::Other("method not supported".into()),
-            Self::ValueNonZero => PrecompileError::Other("value is nonzero".into()),
-            Self::InvalidInput => PrecompileError::Other("input is invalid".into()),
+            Self::MethodNotSupported => PrecompileHalt::Other("method not supported".into()),
+            Self::ValueNonZero => PrecompileHalt::Other("value is nonzero".into()),
+            Self::InvalidInput => PrecompileHalt::Other("input is invalid".into()),
         }
     }
 }
