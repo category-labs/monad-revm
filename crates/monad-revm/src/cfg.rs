@@ -258,6 +258,17 @@ mod tests {
     }
 
     #[test]
+    fn test_eip8037_is_disabled_for_current_monad_specs() {
+        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+            let cfg = MonadCfgEnv::new_with_spec(spec);
+            assert!(
+                !cfg.is_amsterdam_eip8037_enabled(),
+                "EIP-8037 must remain disabled for {spec:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_tx_gas_limit_cap_respects_explicit_override() {
         let mut cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine);
         cfg.0.tx_gas_limit_cap = Some(u64::MAX);
