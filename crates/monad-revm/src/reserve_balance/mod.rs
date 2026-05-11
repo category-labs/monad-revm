@@ -5,7 +5,7 @@ pub mod error;
 pub mod interface;
 pub mod tracker;
 
-use crate::{api::exec::MonadContextTr, journal::MonadJournalTr, MonadSpecId};
+use crate::{api::exec::MonadContextTr, journal::MonadJournalTr, MonadHardfork};
 use abi::{DIPPED_INTO_RESERVE_GAS, DIPPED_INTO_RESERVE_SELECTOR, RESERVE_BALANCE_ADDRESS};
 use error::ReserveBalanceError;
 use revm::{
@@ -24,7 +24,7 @@ where
     CTX: MonadContextTr,
 {
     if inputs.bytecode_address != RESERVE_BALANCE_ADDRESS
-        || !MonadSpecId::MonadNine.is_enabled_in(context.cfg().spec())
+        || !MonadHardfork::MonadNine.is_enabled_in(context.cfg().spec())
     {
         return Ok(None);
     }
@@ -101,7 +101,7 @@ mod tests {
             abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
             tracker::ReserveBalanceInit,
         },
-        MonadCfgEnv, MonadSpecId,
+        MonadCfgEnv, MonadHardfork,
     };
     use alloy_sol_types::SolCall;
     use revm::{
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_non_reserve_balance_address_returns_none() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let mut inputs =
             reserve_balance_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
         inputs.bytecode_address = Address::ZERO;
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_monad_eight_returns_none() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadEight));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadEight));
         let inputs =
             reserve_balance_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
 
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_delegatecall_rejected() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs = reserve_balance_call_inputs(
             CallScheme::DelegateCall,
             false,
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_call_in_static_context_rejected() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs =
             reserve_balance_call_inputs(CallScheme::Call, true, CallValue::Transfer(U256::ZERO));
 
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn test_oog_before_selector_decode() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs = reserve_balance_call_inputs_with_input(
             CallScheme::Call,
             false,
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn test_short_input_hits_fallback() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs = reserve_balance_call_inputs_with_input(
             CallScheme::Call,
             false,
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_unknown_selector_hits_fallback() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs = reserve_balance_call_inputs_with_input(
             CallScheme::Call,
             false,
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_nonzero_value_rejected() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs = reserve_balance_call_inputs(
             CallScheme::Call,
             false,
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn test_extra_input_rejected() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let mut input = dippedIntoReserveCall::SELECTOR.to_vec();
         input.extend_from_slice(&[0u8; 32]);
         let inputs = reserve_balance_call_inputs_with_input(
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_success_returns_false_when_no_violation_is_tracked() {
         let mut ctx = crate::api::default_ctx::MonadContext::monad()
-            .with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let inputs =
             reserve_balance_call_inputs(CallScheme::Call, false, CallValue::Transfer(U256::ZERO));
 
@@ -333,12 +333,12 @@ mod tests {
             AccountInfo { balance: U256::from(1_000u64), ..Default::default() },
         );
 
-        let mut ctx =
-            monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine));
+        let mut ctx = monad_context_with_db(db)
+            .with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine));
         let chain = ctx.chain().clone();
         ctx.journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
             chain: &chain,
-            spec: MonadSpecId::MonadNine,
+            spec: MonadHardfork::MonadNine,
             sender,
             effective_gas_price: 0,
             gas_limit: 0,

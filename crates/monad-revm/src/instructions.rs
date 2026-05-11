@@ -1,4 +1,4 @@
-use crate::MonadSpecId;
+use crate::MonadHardfork;
 use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::EthInstructions,
@@ -24,11 +24,11 @@ pub type MonadInstructions<CTX> = EthInstructions<EthInterpreter, CTX>;
 /// | Storage     | 2100     | 8100  |
 ///
 /// Warm access costs (100 gas) remain the same as Ethereum.
-pub fn monad_gas_params(spec: MonadSpecId) -> GasParams {
+pub fn monad_gas_params(spec: MonadHardfork) -> GasParams {
     let eth_spec = spec.into_eth_spec();
     let mut params = GasParams::new_spec(eth_spec);
 
-    if MonadSpecId::MonadEight.is_enabled_in(spec) {
+    if MonadHardfork::MonadEight.is_enabled_in(spec) {
         params.override_gas([
             // SSTORE uses full cold storage cost
             (GasId::cold_storage_cost(), COLD_SLOAD_COST),
@@ -51,7 +51,7 @@ pub fn monad_gas_params(spec: MonadSpecId) -> GasParams {
 /// For all supported Monad specs, CREATE/CREATE2 use Monad-local handlers so
 /// delegated accounts cannot create contracts. MonadNine+ additionally replaces
 /// memory-expanding opcodes with linear-cost MIP-3 handlers (`words / 2`).
-pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX> {
+pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
     let mut instructions =
         EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec);
@@ -64,7 +64,7 @@ pub fn monad_instructions<CTX: Host>(spec: MonadSpecId) -> MonadInstructions<CTX
     instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
 
     // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
-    if MonadSpecId::MonadNine.is_enabled_in(spec) {
+    if MonadHardfork::MonadNine.is_enabled_in(spec) {
         use revm::interpreter::instructions::gas;
 
         // Memory opcodes
@@ -154,13 +154,13 @@ mod tests {
 
     #[test]
     fn test_monad_gas_params_cold_storage_cost() {
-        let params = monad_gas_params(MonadSpecId::MonadEight);
+        let params = monad_gas_params(MonadHardfork::MonadEight);
         assert_eq!(params.get(GasId::cold_storage_cost()), COLD_SLOAD_COST);
     }
 
     #[test]
     fn test_monad_gas_params_cold_storage_additional_cost() {
-        let params = monad_gas_params(MonadSpecId::MonadEight);
+        let params = monad_gas_params(MonadHardfork::MonadEight);
         assert_eq!(
             params.get(GasId::cold_storage_additional_cost()),
             COLD_SLOAD_COST - WARM_STORAGE_READ_COST
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_monad_gas_params_cold_account_additional_cost() {
-        let params = monad_gas_params(MonadSpecId::MonadEight);
+        let params = monad_gas_params(MonadHardfork::MonadEight);
         assert_eq!(
             params.get(GasId::cold_account_additional_cost()),
             COLD_ACCOUNT_ACCESS_COST - WARM_STORAGE_READ_COST
@@ -178,13 +178,13 @@ mod tests {
 
     #[test]
     fn test_monad_gas_params_warm_storage_unchanged() {
-        let params = monad_gas_params(MonadSpecId::MonadEight);
+        let params = monad_gas_params(MonadHardfork::MonadEight);
         assert_eq!(params.get(GasId::warm_storage_read_cost()), WARM_STORAGE_READ_COST);
     }
 
     #[test]
     fn test_monad_vs_ethereum_cold_costs() {
-        let monad = monad_gas_params(MonadSpecId::MonadEight);
+        let monad = monad_gas_params(MonadHardfork::MonadEight);
         let eth = GasParams::new_spec(SpecId::PRAGUE);
 
         // Monad cold storage: 8100 vs Ethereum: 2100
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(eth.get(GasId::cold_account_additional_cost()), 2500);
     }
 
-    fn run_contract(spec: MonadSpecId, code: Vec<u8>) -> ExecutionResult<HaltReason> {
+    fn run_contract(spec: MonadHardfork, code: Vec<u8>) -> ExecutionResult<HaltReason> {
         let caller = Address::from([0x11; 20]);
         let contract = Address::from([0x22; 20]);
 
@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn run_delegated_contract(
-        spec: MonadSpecId,
+        spec: MonadHardfork,
         target_code: Bytecode,
         delegated_address: Address,
         delegated_code: Vec<u8>,
@@ -278,7 +278,7 @@ mod tests {
             opcode::RETURN,
         ];
 
-        let monad_eight_result = run_contract(MonadSpecId::MonadEight, clz_contract.clone());
+        let monad_eight_result = run_contract(MonadHardfork::MonadEight, clz_contract.clone());
         assert!(
             matches!(
                 monad_eight_result,
@@ -287,7 +287,7 @@ mod tests {
             "CLZ should be unavailable before MonadNine, got {monad_eight_result:?}"
         );
 
-        let monad_nine_result = run_contract(MonadSpecId::MonadNine, clz_contract);
+        let monad_nine_result = run_contract(MonadHardfork::MonadNine, clz_contract);
         let output = monad_nine_result.output().expect("CLZ should return data on MonadNine");
         assert_eq!(
             U256::from_be_slice(output.as_ref()),
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_extended_stack_opcode_bytes_are_unavailable_on_monad_nine_and_next() {
-        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
             for opcode in [DUPN_OPCODE, SWAPN_OPCODE, EXCHANGE_OPCODE] {
                 let result = run_contract(spec, vec![opcode]);
                 assert!(
@@ -335,7 +335,7 @@ mod tests {
             opcode::RETURN,
         ];
 
-        for spec in [MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
             let result = run_contract(spec, contract.clone());
             let output = result.output().expect("jump target should execute successfully");
             assert_eq!(
@@ -351,7 +351,8 @@ mod tests {
         let delegated_address = Address::from([0x33; 20]);
         let delegated_code = vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE];
 
-        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
             let result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -375,7 +376,8 @@ mod tests {
         let delegated_code =
             vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE2];
 
-        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
             let result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -420,7 +422,8 @@ mod tests {
             opcode::CREATE2,
         ]));
 
-        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
             let delegated_result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -453,7 +456,7 @@ mod tests {
     #[test]
     fn test_create_still_succeeds_for_regular_contracts() {
         let result = run_contract(
-            MonadSpecId::MonadNine,
+            MonadHardfork::MonadNine,
             vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE, opcode::STOP],
         );
         assert!(

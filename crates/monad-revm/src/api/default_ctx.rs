@@ -1,6 +1,6 @@
 // Default Monad context type and factory.
 
-use crate::{MonadCfgEnv, MonadChainContext, MonadJournal, MonadSpecId};
+use crate::{MonadCfgEnv, MonadChainContext, MonadHardfork, MonadJournal};
 use revm::{
     context::{BlockEnv, LocalContext, TxEnv},
     context_interface::JournalTr,
@@ -12,7 +12,7 @@ use revm::{
 ///
 /// Uses standard Ethereum types since Monad doesn't need custom tx/block types.
 /// The key difference is:
-/// - Using `MonadSpecId` instead of `SpecId`
+/// - Using `MonadHardfork` instead of `SpecId`
 /// - Using `MonadCfgEnv` which has Monad-specific defaults (128KB code size limit)
 pub type MonadContext<DB> =
     Context<BlockEnv, TxEnv, MonadCfgEnv, DB, MonadJournal<DB>, MonadChainContext>;
@@ -26,7 +26,7 @@ pub trait DefaultMonad {
 /// Creates a Monad context with the given database backend.
 pub fn monad_context_with_db<DB: Database>(db: DB) -> MonadContext<DB> {
     let mut journaled_state = MonadJournal::new(db);
-    journaled_state.set_spec_id(MonadSpecId::default().into());
+    journaled_state.set_spec_id(MonadHardfork::default().into());
     Context {
         block: BlockEnv::default(),
         tx: TxEnv::default(),

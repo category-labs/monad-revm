@@ -15,7 +15,7 @@
 //!
 //! *Base cost per operation
 
-use crate::{api::exec::MonadContextTr, reserve_balance, staking, MonadSpecId};
+use crate::{api::exec::MonadContextTr, reserve_balance, staking, MonadHardfork};
 use revm::{
     context::Cfg,
     handler::{EthPrecompiles, PrecompileProvider},
@@ -246,13 +246,13 @@ pub struct MonadPrecompiles {
     /// Inner precompile provider with Monad-specific gas costs.
     inner: EthPrecompiles,
     /// Spec id of the precompile provider.
-    spec: MonadSpecId,
+    spec: MonadHardfork,
 }
 
 impl MonadPrecompiles {
     /// Create a new precompile provider with the given spec.
     #[inline]
-    pub fn new_with_spec(spec: MonadSpecId) -> Self {
+    pub fn new_with_spec(spec: MonadHardfork) -> Self {
         // Start with Ethereum precompiles for the underlying spec
         let mut precompiles = Precompiles::new(spec.into_eth_spec().into()).clone();
 
@@ -323,7 +323,7 @@ where
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
         // Include staking precompile address along with standard ones
         let mut addresses = vec![staking::storage::STAKING_ADDRESS];
-        if MonadSpecId::MonadNine.is_enabled_in(self.spec) {
+        if MonadHardfork::MonadNine.is_enabled_in(self.spec) {
             addresses.push(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
         }
         addresses.extend(self.inner.warm_addresses());
@@ -333,7 +333,7 @@ where
     #[inline]
     fn contains(&self, address: &Address) -> bool {
         *address == staking::storage::STAKING_ADDRESS
-            || (MonadSpecId::MonadNine.is_enabled_in(self.spec)
+            || (MonadHardfork::MonadNine.is_enabled_in(self.spec)
                 && *address == reserve_balance::abi::RESERVE_BALANCE_ADDRESS)
             || self.inner.contains(address)
     }
@@ -341,7 +341,7 @@ where
 
 impl Default for MonadPrecompiles {
     fn default() -> Self {
-        Self::new_with_spec(MonadSpecId::default())
+        Self::new_with_spec(MonadHardfork::default())
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
         input
     }
 
-    fn modexp_precompile(spec: MonadSpecId) -> &'static Precompile {
+    fn modexp_precompile(spec: MonadHardfork) -> &'static Precompile {
         MonadPrecompiles::new_with_spec(spec)
             .precompiles()
             .get(&precompile::u64_to_address(0x05))
@@ -667,14 +667,14 @@ mod tests {
         let oversized_input = modexp_input(&vec![0u8; 1025], &[0x01], &[0x01]);
 
         let monad_eight_result =
-            modexp_precompile(MonadSpecId::MonadEight).execute(&oversized_input, 100_000_000, 0);
+            modexp_precompile(MonadHardfork::MonadEight).execute(&oversized_input, 100_000_000, 0);
         assert!(
             monad_eight_result.is_ok(),
             "MonadEight should not apply the Osaka MODEXP size limit"
         );
 
         let monad_nine_result =
-            modexp_precompile(MonadSpecId::MonadNine).execute(&oversized_input, 100_000_000, 0);
+            modexp_precompile(MonadHardfork::MonadNine).execute(&oversized_input, 100_000_000, 0);
         assert!(
             matches!(
                 monad_nine_result,
@@ -697,10 +697,10 @@ mod tests {
                 .expect("valid modulus hex"),
         );
 
-        let monad_eight_result = modexp_precompile(MonadSpecId::MonadEight)
+        let monad_eight_result = modexp_precompile(MonadHardfork::MonadEight)
             .execute(&input, 10_000_000, 0)
             .expect("MonadEight MODEXP should succeed");
-        let monad_nine_result = modexp_precompile(MonadSpecId::MonadNine)
+        let monad_nine_result = modexp_precompile(MonadHardfork::MonadNine)
             .execute(&input, 10_000_000, 0)
             .expect("MonadNine MODEXP should succeed");
 
