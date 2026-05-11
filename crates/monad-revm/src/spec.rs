@@ -55,9 +55,9 @@ impl FromStr for MonadHardfork {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            name::MONAD_EIGHT => Ok(Self::MonadEight),
-            name::MONAD_NINE => Ok(Self::MonadNine),
-            name::MONAD_NEXT => Ok(Self::MonadNext),
+            s if s.eq_ignore_ascii_case(name::MONAD_EIGHT) => Ok(Self::MonadEight),
+            s if s.eq_ignore_ascii_case(name::MONAD_NINE) => Ok(Self::MonadNine),
+            s if s.eq_ignore_ascii_case(name::MONAD_NEXT) => Ok(Self::MonadNext),
             _ => Err(UnknownHardfork),
         }
     }
@@ -116,8 +116,11 @@ mod tests {
     #[test]
     fn test_monad_hardfork_from_str() {
         assert_eq!("MonadEight".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadEight);
+        assert_eq!("monadeight".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadEight);
         assert_eq!("MonadNine".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNine);
+        assert_eq!("monadnine".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNine);
         assert_eq!("MonadNext".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNext);
+        assert_eq!("monadnext".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNext);
     }
 
     #[test]
