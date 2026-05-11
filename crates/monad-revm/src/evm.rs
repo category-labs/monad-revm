@@ -2,7 +2,7 @@
 use crate::{
     instructions::{monad_instructions, MonadInstructions},
     precompiles::MonadPrecompiles,
-    MonadSpecId,
+    MonadHardfork,
 };
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
@@ -28,7 +28,7 @@ pub struct MonadEvm<
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadSpecId>>,
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>>,
 {
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {

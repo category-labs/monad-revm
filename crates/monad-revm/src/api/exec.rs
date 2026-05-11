@@ -2,7 +2,7 @@
 
 use crate::{
     chain::MonadChainContext, evm::MonadEvm, handler::MonadHandler,
-    instructions::MonadInstructions, journal::MonadJournalTr, MonadSpecId,
+    instructions::MonadInstructions, journal::MonadJournalTr, MonadHardfork,
 };
 use revm::{
     context::{result::ExecResultAndState, ContextSetters},
@@ -25,7 +25,7 @@ pub trait MonadContextTr:
     ContextTr<
     Journal: MonadJournalTr<State = EvmState>,
     Tx: Transaction,
-    Cfg: Cfg<Spec = MonadSpecId>,
+    Cfg: Cfg<Spec = MonadHardfork>,
     Chain = MonadChainContext,
 >
 {
@@ -35,7 +35,7 @@ impl<T> MonadContextTr for T where
     T: ContextTr<
         Journal: MonadJournalTr<State = EvmState>,
         Tx: Transaction,
-        Cfg: Cfg<Spec = MonadSpecId>,
+        Cfg: Cfg<Spec = MonadHardfork>,
         Chain = MonadChainContext,
     >
 {

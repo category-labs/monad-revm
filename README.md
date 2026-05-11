@@ -300,7 +300,7 @@ monad-revm/
 
 ## Feature flags
 
-- `serde`: Enable serialization for `MonadSpecId`.
+- `serde`: Enable serialization for `MonadHardfork`.
 - `alloy-evm`: Enable integration with `alloy_evm::precompiles::PrecompilesMap`.
 
 ## Integration layers
