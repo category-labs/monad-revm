@@ -1,5 +1,5 @@
 //! Contains the [`MonadHardfork`] type and its implementation.
-use core::str::FromStr;
+use core::{fmt, str::FromStr};
 use revm::primitives::hardfork::{SpecId, UnknownHardfork};
 
 /// Monad hardfork identifier.
@@ -73,6 +73,13 @@ impl From<MonadHardfork> for &'static str {
     }
 }
 
+impl fmt::Display for MonadHardfork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name: &'static str = (*self).into();
+        f.write_str(name)
+    }
+}
+
 /// String identifiers for Monad hardforks
 pub mod name {
     /// Mainnet launch spec name.
@@ -124,6 +131,13 @@ mod tests {
         assert_eq!(name, "MonadEight");
         let name: &'static str = MonadHardfork::MonadNine.into();
         assert_eq!(name, "MonadNine");
+    }
+
+    #[test]
+    fn test_monad_hardfork_display() {
+        assert_eq!(MonadHardfork::MonadEight.to_string(), "MonadEight");
+        assert_eq!(MonadHardfork::MonadNine.to_string(), "MonadNine");
+        assert_eq!(MonadHardfork::MonadNext.to_string(), "MonadNext");
     }
 
     #[test]
