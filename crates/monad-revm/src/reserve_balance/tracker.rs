@@ -1,6 +1,6 @@
 //! Reserve-balance tracker.
 
-use crate::{chain::MonadChainContext, staking::STAKING_ADDRESS, MonadSpecId};
+use crate::{chain::MonadChainContext, staking::STAKING_ADDRESS, MonadHardfork};
 use revm::{
     bytecode::Bytecode,
     primitives::{Address, HashMap, HashSet, KECCAK_EMPTY, U256},
@@ -13,7 +13,7 @@ pub struct ReserveBalanceInit<'a> {
     /// Monad chain metadata for sender-dip checks and reserve policy.
     pub chain: &'a MonadChainContext,
     /// Active Monad hardfork.
-    pub spec: MonadSpecId,
+    pub spec: MonadHardfork,
     /// Transaction sender.
     pub sender: Address,
     /// Effective gas price used to charge the transaction.
@@ -61,9 +61,9 @@ impl ReserveBalanceTracker {
         self.clear();
         self.tracking_enabled = true;
         self.chain = init.chain.clone();
-        self.use_recent_code_hash = MonadSpecId::MonadEight.is_enabled_in(init.spec);
+        self.use_recent_code_hash = MonadHardfork::MonadEight.is_enabled_in(init.spec);
         self.sender = init.sender;
-        self.allow_init_selfdestruct_exemption = MonadSpecId::MonadNine.is_enabled_in(init.spec);
+        self.allow_init_selfdestruct_exemption = MonadHardfork::MonadNine.is_enabled_in(init.spec);
         self.sender_gas_fees = U256::from(init.effective_gas_price) * U256::from(init.gas_limit);
         self.sender_can_dip = init.chain.sender_can_dip(self.sender, init.sender_is_delegated);
         self.update_loaded_account(init.sender_account, self.sender);

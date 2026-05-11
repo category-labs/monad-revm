@@ -1,6 +1,6 @@
 use crate::{
     evm::MonadEvm, instructions::MonadInstructions, precompiles::MonadPrecompiles,
-    MonadChainContext, MonadJournal, MonadSpecId,
+    MonadChainContext, MonadHardfork, MonadJournal,
 };
 use revm::{
     context::Cfg,
@@ -32,7 +32,7 @@ impl<BLOCK, TX, CFG, DB, LOCAL> MonadBuilder
 where
     BLOCK: Block,
     TX: Transaction,
-    CFG: Cfg<Spec = MonadSpecId>,
+    CFG: Cfg<Spec = MonadHardfork>,
     DB: Database,
     LOCAL: LocalContextTr,
 {

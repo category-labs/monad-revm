@@ -1,16 +1,15 @@
-//! Contains the `[MonadSpecId]` type and its implementation.
+//! Contains the [`MonadHardfork`] type and its implementation.
 use core::str::FromStr;
 use revm::primitives::hardfork::{SpecId, UnknownHardfork};
 
-/// Monad spec id.
+/// Monad hardfork identifier.
 ///
 /// Variants are ordered by activation order. Lower discriminant = earlier hardfork.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[allow(non_camel_case_types)]
-pub enum MonadSpecId {
-    /// Monad launch spec id (based on Prague).
+pub enum MonadHardfork {
+    /// Monad launch hardfork (based on Prague).
     MonadEight = 100,
     /// MIP-3, MIP-4, MIP-5
     #[default]
@@ -19,7 +18,7 @@ pub enum MonadSpecId {
     MonadNext = 102,
 }
 
-impl MonadSpecId {
+impl MonadHardfork {
     /// Returns the underlying Ethereum [`SpecId`] this Monad hardfork is built upon.
     ///
     /// Used internally to:
@@ -45,13 +44,13 @@ impl MonadSpecId {
     }
 }
 
-impl From<MonadSpecId> for SpecId {
-    fn from(spec: MonadSpecId) -> Self {
+impl From<MonadHardfork> for SpecId {
+    fn from(spec: MonadHardfork) -> Self {
         spec.into_eth_spec()
     }
 }
 
-impl FromStr for MonadSpecId {
+impl FromStr for MonadHardfork {
     type Err = UnknownHardfork;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -64,12 +63,12 @@ impl FromStr for MonadSpecId {
     }
 }
 
-impl From<MonadSpecId> for &'static str {
-    fn from(spec_id: MonadSpecId) -> Self {
+impl From<MonadHardfork> for &'static str {
+    fn from(spec_id: MonadHardfork) -> Self {
         match spec_id {
-            MonadSpecId::MonadEight => name::MONAD_EIGHT,
-            MonadSpecId::MonadNine => name::MONAD_NINE,
-            MonadSpecId::MonadNext => name::MONAD_NEXT,
+            MonadHardfork::MonadEight => name::MONAD_EIGHT,
+            MonadHardfork::MonadNine => name::MONAD_NINE,
+            MonadHardfork::MonadNext => name::MONAD_NEXT,
         }
     }
 }
@@ -89,67 +88,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_monad_spec_id_default() {
-        assert_eq!(MonadSpecId::default(), MonadSpecId::MonadNine);
+    fn test_monad_hardfork_default() {
+        assert_eq!(MonadHardfork::default(), MonadHardfork::MonadNine);
     }
 
     #[test]
-    fn test_monad_spec_into_eth_spec() {
-        assert_eq!(MonadSpecId::MonadEight.into_eth_spec(), SpecId::PRAGUE);
-        assert_eq!(MonadSpecId::MonadNine.into_eth_spec(), SpecId::OSAKA);
-        assert_eq!(MonadSpecId::MonadNext.into_eth_spec(), SpecId::OSAKA);
+    fn test_monad_hardfork_type() {
+        let spec: MonadHardfork = MonadHardfork::MonadNine;
+        assert_eq!(spec, MonadHardfork::MonadNine);
+        assert_eq!(spec.into_eth_spec(), SpecId::OSAKA);
     }
 
     #[test]
-    fn test_monad_spec_from_str() {
-        assert_eq!("MonadEight".parse::<MonadSpecId>().unwrap(), MonadSpecId::MonadEight);
-        assert_eq!("MonadNine".parse::<MonadSpecId>().unwrap(), MonadSpecId::MonadNine);
-        assert_eq!("MonadNext".parse::<MonadSpecId>().unwrap(), MonadSpecId::MonadNext);
+    fn test_monad_hardfork_into_eth_spec() {
+        assert_eq!(MonadHardfork::MonadEight.into_eth_spec(), SpecId::PRAGUE);
+        assert_eq!(MonadHardfork::MonadNine.into_eth_spec(), SpecId::OSAKA);
+        assert_eq!(MonadHardfork::MonadNext.into_eth_spec(), SpecId::OSAKA);
     }
 
     #[test]
-    fn test_monad_spec_from_str_unknown() {
-        assert!("Unknown".parse::<MonadSpecId>().is_err());
+    fn test_monad_hardfork_from_str() {
+        assert_eq!("MonadEight".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadEight);
+        assert_eq!("MonadNine".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNine);
+        assert_eq!("MonadNext".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNext);
     }
 
     #[test]
-    fn test_monad_spec_into_str() {
-        let name: &'static str = MonadSpecId::MonadEight.into();
+    fn test_monad_hardfork_from_str_unknown() {
+        assert!("Unknown".parse::<MonadHardfork>().is_err());
+    }
+
+    #[test]
+    fn test_monad_hardfork_into_str() {
+        let name: &'static str = MonadHardfork::MonadEight.into();
         assert_eq!(name, "MonadEight");
-        let name: &'static str = MonadSpecId::MonadNine.into();
+        let name: &'static str = MonadHardfork::MonadNine.into();
         assert_eq!(name, "MonadNine");
     }
 
     #[test]
-    fn test_monad_spec_is_enabled_in() {
+    fn test_monad_hardfork_is_enabled_in() {
         // MonadEight is enabled in every spec
-        assert!(MonadSpecId::MonadEight.is_enabled_in(MonadSpecId::MonadEight));
-        assert!(MonadSpecId::MonadEight.is_enabled_in(MonadSpecId::MonadNine));
-        assert!(MonadSpecId::MonadEight.is_enabled_in(MonadSpecId::MonadNext));
+        assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadEight));
+        assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadNext));
 
         // MonadNine is NOT enabled in MonadEight
-        assert!(!MonadSpecId::MonadNine.is_enabled_in(MonadSpecId::MonadEight));
+        assert!(!MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadEight));
         // MonadNine IS enabled in MonadNine and MonadNext
-        assert!(MonadSpecId::MonadNine.is_enabled_in(MonadSpecId::MonadNine));
-        assert!(MonadSpecId::MonadNine.is_enabled_in(MonadSpecId::MonadNext));
+        assert!(MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadNext));
 
         // MonadNext is only enabled in MonadNext
-        assert!(!MonadSpecId::MonadNext.is_enabled_in(MonadSpecId::MonadEight));
-        assert!(!MonadSpecId::MonadNext.is_enabled_in(MonadSpecId::MonadNine));
-        assert!(MonadSpecId::MonadNext.is_enabled_in(MonadSpecId::MonadNext));
+        assert!(!MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadEight));
+        assert!(!MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadNext));
     }
 
     #[test]
-    fn test_monad_spec_ordering() {
-        assert!(MonadSpecId::MonadEight < MonadSpecId::MonadNine);
-        assert!(MonadSpecId::MonadNine < MonadSpecId::MonadNext);
+    fn test_monad_hardfork_ordering() {
+        assert!(MonadHardfork::MonadEight < MonadHardfork::MonadNine);
+        assert!(MonadHardfork::MonadNine < MonadHardfork::MonadNext);
     }
 
     #[test]
-    fn test_monad_spec_from_impl() {
-        let spec_id: SpecId = MonadSpecId::MonadEight.into();
+    fn test_monad_hardfork_from_impl() {
+        let spec_id: SpecId = MonadHardfork::MonadEight.into();
         assert_eq!(spec_id, SpecId::PRAGUE);
-        let spec_id: SpecId = MonadSpecId::MonadNine.into();
+        let spec_id: SpecId = MonadHardfork::MonadNine.into();
         assert_eq!(spec_id, SpecId::OSAKA);
     }
 }

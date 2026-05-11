@@ -1,9 +1,9 @@
 //! Monad-specific EVM configuration.
 //!
-//! This module provides [`MonadCfgEnv`], a wrapper around `CfgEnv<MonadSpecId>` that
+//! This module provides [`MonadCfgEnv`], a wrapper around `CfgEnv<MonadHardfork>` that
 //! implements the `Cfg` trait with Monad-specific defaults.
 
-use crate::{instructions::monad_gas_params, MonadSpecId};
+use crate::{instructions::monad_gas_params, MonadHardfork};
 use core::ops::{Deref, DerefMut};
 use revm::context::{Cfg, CfgEnv};
 use revm::context_interface::cfg::GasParams;
@@ -27,7 +27,7 @@ pub const MONAD_MAX_INITCODE_SIZE: usize = MONAD_MAX_CODE_SIZE * 2; // 256KB
 
 /// Monad-specific EVM configuration.
 ///
-/// This is a newtype wrapper around `CfgEnv<MonadSpecId>` that implements
+/// This is a newtype wrapper around `CfgEnv<MonadHardfork>` that implements
 /// the `Cfg` trait with Monad-specific defaults for:
 /// - `max_code_size()`: Returns [`MONAD_MAX_CODE_SIZE`] (128KB) instead of EIP-170's 24KB
 /// - `max_initcode_size()`: Returns [`MONAD_MAX_INITCODE_SIZE`] (256KB) instead of EIP-3860's 48KB
@@ -35,32 +35,32 @@ pub const MONAD_MAX_INITCODE_SIZE: usize = MONAD_MAX_CODE_SIZE * 2; // 256KB
 /// All other configuration options are delegated to the inner `CfgEnv`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MonadCfgEnv(pub CfgEnv<MonadSpecId>);
+pub struct MonadCfgEnv(pub CfgEnv<MonadHardfork>);
 
 impl MonadCfgEnv {
     /// Creates a new `MonadCfgEnv` with default Monad spec and Monad gas params.
     pub fn new() -> Self {
-        let spec = MonadSpecId::default();
+        let spec = MonadHardfork::default();
         Self(CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec)))
     }
 
     /// Creates a new `MonadCfgEnv` with the specified spec and Monad gas params.
-    pub fn new_with_spec(spec: MonadSpecId) -> Self {
+    pub fn new_with_spec(spec: MonadHardfork) -> Self {
         Self(CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec)))
     }
 
     /// Returns a reference to the inner `CfgEnv`.
-    pub const fn inner(&self) -> &CfgEnv<MonadSpecId> {
+    pub const fn inner(&self) -> &CfgEnv<MonadHardfork> {
         &self.0
     }
 
     /// Returns a mutable reference to the inner `CfgEnv`.
-    pub const fn inner_mut(&mut self) -> &mut CfgEnv<MonadSpecId> {
+    pub const fn inner_mut(&mut self) -> &mut CfgEnv<MonadHardfork> {
         &mut self.0
     }
 
     /// Consumes self and returns the inner `CfgEnv`.
-    pub fn into_inner(self) -> CfgEnv<MonadSpecId> {
+    pub fn into_inner(self) -> CfgEnv<MonadHardfork> {
         self.0
     }
 
@@ -77,8 +77,8 @@ impl Default for MonadCfgEnv {
     }
 }
 
-impl From<CfgEnv<MonadSpecId>> for MonadCfgEnv {
-    fn from(mut cfg: CfgEnv<MonadSpecId>) -> Self {
+impl From<CfgEnv<MonadHardfork>> for MonadCfgEnv {
+    fn from(mut cfg: CfgEnv<MonadHardfork>) -> Self {
         // Inject Monad-specific gas params when converting from CfgEnv.
         // This ensures downstream consumers (alloy-monad-evm, monad-foundry)
         // automatically get Monad gas costs when converting.
@@ -87,14 +87,14 @@ impl From<CfgEnv<MonadSpecId>> for MonadCfgEnv {
     }
 }
 
-impl From<MonadCfgEnv> for CfgEnv<MonadSpecId> {
+impl From<MonadCfgEnv> for CfgEnv<MonadHardfork> {
     fn from(cfg: MonadCfgEnv) -> Self {
         cfg.0
     }
 }
 
 impl Deref for MonadCfgEnv {
-    type Target = CfgEnv<MonadSpecId>;
+    type Target = CfgEnv<MonadHardfork>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -108,7 +108,7 @@ impl DerefMut for MonadCfgEnv {
 }
 
 impl Cfg for MonadCfgEnv {
-    type Spec = MonadSpecId;
+    type Spec = MonadHardfork;
 
     #[inline]
     fn chain_id(&self) -> u64 {
@@ -155,23 +155,23 @@ impl Cfg for MonadCfgEnv {
     }
 
     fn is_eip3541_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_eip3541_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip3541_disabled(&self.0)
     }
 
     fn is_eip3607_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_eip3607_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip3607_disabled(&self.0)
     }
 
     fn is_eip7623_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_eip7623_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip7623_disabled(&self.0)
     }
 
     fn is_balance_check_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_balance_check_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_balance_check_disabled(&self.0)
     }
 
     fn is_block_gas_limit_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_block_gas_limit_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_block_gas_limit_disabled(&self.0)
     }
 
     fn is_nonce_check_disabled(&self) -> bool {
@@ -179,30 +179,30 @@ impl Cfg for MonadCfgEnv {
     }
 
     fn is_base_fee_check_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_base_fee_check_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_base_fee_check_disabled(&self.0)
     }
 
     fn is_priority_fee_check_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_priority_fee_check_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_priority_fee_check_disabled(&self.0)
     }
 
     fn is_fee_charge_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_fee_charge_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_fee_charge_disabled(&self.0)
     }
 
     fn is_eip7708_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_eip7708_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip7708_disabled(&self.0)
     }
 
     fn is_eip7708_delayed_burn_disabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_eip7708_delayed_burn_disabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip7708_delayed_burn_disabled(&self.0)
     }
 
     fn memory_limit(&self) -> u64 {
-        if MonadSpecId::MonadNine.is_enabled_in(self.0.spec) {
+        if MonadHardfork::MonadNine.is_enabled_in(self.0.spec) {
             MONAD_MEMORY_LIMIT
         } else {
-            <CfgEnv<MonadSpecId> as Cfg>::memory_limit(&self.0)
+            <CfgEnv<MonadHardfork> as Cfg>::memory_limit(&self.0)
         }
     }
 
@@ -211,7 +211,7 @@ impl Cfg for MonadCfgEnv {
     }
 
     fn is_amsterdam_eip8037_enabled(&self) -> bool {
-        <CfgEnv<MonadSpecId> as Cfg>::is_amsterdam_eip8037_enabled(&self.0)
+        <CfgEnv<MonadHardfork> as Cfg>::is_amsterdam_eip8037_enabled(&self.0)
     }
 }
 
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_from_cfg_env() {
-        let cfg_env = CfgEnv::new_with_spec(MonadSpecId::default());
+        let cfg_env = CfgEnv::new_with_spec(MonadHardfork::default());
         let monad_cfg: MonadCfgEnv = cfg_env.into();
 
         // Should now use Monad defaults
@@ -247,7 +247,8 @@ mod tests {
     fn test_tx_gas_limit_cap_is_monad_cap() {
         // Monad uses a 30M tx gas limit, not EIP-7825's 16.7M.
         // This must hold for all specs, including MonadNine which maps to OSAKA.
-        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
             let cfg = MonadCfgEnv::new_with_spec(spec);
             assert_eq!(
                 cfg.tx_gas_limit_cap(),
@@ -259,7 +260,8 @@ mod tests {
 
     #[test]
     fn test_eip8037_is_disabled_for_current_monad_specs() {
-        for spec in [MonadSpecId::MonadEight, MonadSpecId::MonadNine, MonadSpecId::MonadNext] {
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
             let cfg = MonadCfgEnv::new_with_spec(spec);
             assert!(
                 !cfg.is_amsterdam_eip8037_enabled(),
@@ -270,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_tx_gas_limit_cap_respects_explicit_override() {
-        let mut cfg = MonadCfgEnv::new_with_spec(MonadSpecId::MonadNine);
+        let mut cfg = MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine);
         cfg.0.tx_gas_limit_cap = Some(u64::MAX);
         assert_eq!(cfg.tx_gas_limit_cap(), u64::MAX);
 
