@@ -22,7 +22,7 @@ use revm::{
     interpreter::{CallInputs, InterpreterResult},
     precompile::{
         bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileHalt, PrecompileId,
-        PrecompileOutput, PrecompileResult, PrecompileStatus, Precompiles,
+        PrecompileOutput, PrecompileResult, Precompiles,
     },
     primitives::{alloy_primitives::B512, hardfork::SpecId, Address, Bytes, B256},
 };
@@ -348,7 +348,7 @@ impl Default for MonadPrecompiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revm::precompile::{self, PrecompileHalt};
+    use revm::precompile::{self, PrecompileHalt, PrecompileStatus};
     use revm::primitives::{hex, U256};
 
     fn modexp_input(base: &[u8], exponent: &[u8], modulus: &[u8]) -> Vec<u8> {

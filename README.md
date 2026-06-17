@@ -10,7 +10,7 @@
 
 | Component | Version |
 |-----------|---------|
-| **revm** | v34.0.0 |
+| **revm** | v38.0.0 |
 | **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadNext` |
 | **Default Monad spec** | `MonadNine` (Osaka-compatible with Monad-specific exclusions) |
 
@@ -307,6 +307,10 @@ monad-revm/
 
 - [`alloy-monad-evm`](https://github.com/category-labs/alloy-monad-evm): Alloy `Evm` / `EvmFactory` wrapper over `monad-revm`.
 - [`monad-foundry`](https://github.com/category-labs/foundry/tree/monad): Foundry integration (Forge/Anvil/Cast/Chisel).
+
+## Release coordination
+
+`monad-revm`, `alloy-monad-evm`, and Foundry's Monad integration must move together when porting to a new upstream Foundry/revm/alloy stack. Keep downstream consumers pinned to matching integration refs during a port, then update them to the merged commits or immutable release tags before retiring temporary integration refs.
 
 ## References
 
