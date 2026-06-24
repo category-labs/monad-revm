@@ -267,6 +267,7 @@ where
                     scheme: CallScheme::Call,
                     is_static: false,
                     return_memory_offset: 0..0,
+                    charged_new_account_state_gas: false,
                 }))
             }
             TxKind::Create => FrameInput::Create(Box::new(CreateInputs::new(

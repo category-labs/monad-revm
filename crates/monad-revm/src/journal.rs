@@ -100,14 +100,6 @@ impl<DB: Database> JournalExt for MonadJournal<DB> {
     fn journal(&self) -> &[JournalEntry] {
         &self.inner.journal
     }
-
-    fn evm_state(&self) -> &EvmState {
-        &self.inner.state
-    }
-
-    fn evm_state_mut(&mut self) -> &mut EvmState {
-        &mut self.inner.state
-    }
 }
 
 impl<DB: Database> JournalTr for MonadJournal<DB> {
@@ -128,6 +120,14 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
 
     fn db_mut(&mut self) -> &mut Self::Database {
         self.inner.db_mut()
+    }
+
+    fn db_and_state(&self) -> (&Self::Database, &Self::State) {
+        self.inner.db_and_state()
+    }
+
+    fn db_and_state_mut(&mut self) -> (&mut Self::Database, &mut Self::State) {
+        self.inner.db_and_state_mut()
     }
 
     fn sload(
@@ -187,7 +187,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         self.inner.warm_coinbase_account(address)
     }
 
-    fn warm_precompiles(&mut self, precompiles: AddressSet) {
+    fn warm_precompiles(&mut self, precompiles: &AddressSet) {
         self.inner.warm_precompiles(precompiles)
     }
 

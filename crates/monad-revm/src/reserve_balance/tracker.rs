@@ -154,7 +154,7 @@ impl ReserveBalanceTracker {
     }
 
     fn pretx_reserve(&self, address: Address, account: &Account) -> U256 {
-        self.chain.max_reserve_balance(address).min(account.original_info.balance)
+        self.chain.max_reserve_balance(address).min(account.original_info().balance)
     }
 
     fn compute_violation_threshold(&self, account: &Account, address: Address) -> Option<U256> {
@@ -180,7 +180,7 @@ impl ReserveBalanceTracker {
         let effective_code_hash = if self.use_recent_code_hash {
             account.info.code_hash
         } else {
-            account.original_info.code_hash
+            account.original_info().code_hash
         };
         if effective_code_hash.is_zero() || effective_code_hash == KECCAK_EMPTY {
             return true;
@@ -190,7 +190,7 @@ impl ReserveBalanceTracker {
             .info
             .code
             .as_ref()
-            .or(account.original_info.code.as_ref())
+            .or(account.original_info().code.as_ref())
             .is_some_and(Bytecode::is_eip7702)
     }
 }

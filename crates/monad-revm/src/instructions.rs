@@ -3,7 +3,7 @@ use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::EthInstructions,
     interpreter::{
-        instructions::{instruction_table_gas_changes_spec, Instruction},
+        instructions::{gas_table_spec, instruction_table, Instruction},
         interpreter::EthInterpreter,
         Host,
     },
@@ -54,24 +54,33 @@ pub fn monad_gas_params(spec: MonadHardfork) -> GasParams {
 pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
     let mut instructions =
-        EthInstructions::new(instruction_table_gas_changes_spec(eth_spec), eth_spec);
+        EthInstructions::new(instruction_table(), gas_table_spec(eth_spec), eth_spec);
 
     // All supported Monad specs forbid CREATE/CREATE2 while executing on behalf of
     // an EIP-7702 delegated account.
     use crate::memory::opcodes;
     use revm::bytecode::opcode::*;
-    instructions.insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>, 0));
-    instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>, 0));
-    instructions.insert_instruction(CALL, Instruction::new(opcodes::call, WARM_STORAGE_READ_COST));
-    instructions
-        .insert_instruction(CALLCODE, Instruction::new(opcodes::call_code, WARM_STORAGE_READ_COST));
+    instructions.insert_instruction(CREATE, Instruction::new(opcodes::create::<_, false, _>), 0);
+    instructions.insert_instruction(CREATE2, Instruction::new(opcodes::create::<_, true, _>), 0);
+    instructions.insert_instruction(
+        CALL,
+        Instruction::new(opcodes::call),
+        WARM_STORAGE_READ_COST as u16,
+    );
+    instructions.insert_instruction(
+        CALLCODE,
+        Instruction::new(opcodes::call_code),
+        WARM_STORAGE_READ_COST as u16,
+    );
     instructions.insert_instruction(
         DELEGATECALL,
-        Instruction::new(opcodes::delegate_call, WARM_STORAGE_READ_COST),
+        Instruction::new(opcodes::delegate_call),
+        WARM_STORAGE_READ_COST as u16,
     );
     instructions.insert_instruction(
         STATICCALL,
-        Instruction::new(opcodes::static_call, WARM_STORAGE_READ_COST),
+        Instruction::new(opcodes::static_call),
+        WARM_STORAGE_READ_COST as u16,
     );
 
     // MIP-3: Replace memory-expanding opcodes with linear-cost variants.
@@ -79,35 +88,62 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
         use revm::interpreter::instructions::gas;
 
         // Memory opcodes
-        instructions.insert_instruction(MLOAD, Instruction::new(opcodes::mload, 3));
-        instructions.insert_instruction(MSTORE, Instruction::new(opcodes::mstore, 3));
-        instructions.insert_instruction(MSTORE8, Instruction::new(opcodes::mstore8, 3));
-        instructions.insert_instruction(MCOPY, Instruction::new(opcodes::mcopy, 3));
+        instructions.insert_instruction(MLOAD, Instruction::new(opcodes::mload), 3);
+        instructions.insert_instruction(MSTORE, Instruction::new(opcodes::mstore), 3);
+        instructions.insert_instruction(MSTORE8, Instruction::new(opcodes::mstore8), 3);
+        instructions.insert_instruction(MCOPY, Instruction::new(opcodes::mcopy), 3);
 
         // Hash
-        instructions
-            .insert_instruction(KECCAK256, Instruction::new(opcodes::keccak256, gas::KECCAK256));
+        instructions.insert_instruction(
+            KECCAK256,
+            Instruction::new(opcodes::keccak256),
+            gas::KECCAK256 as u16,
+        );
 
         // Copy opcodes
-        instructions.insert_instruction(CALLDATACOPY, Instruction::new(opcodes::calldatacopy, 3));
-        instructions.insert_instruction(CODECOPY, Instruction::new(opcodes::codecopy, 3));
-        instructions
-            .insert_instruction(RETURNDATACOPY, Instruction::new(opcodes::returndatacopy, 3));
+        instructions.insert_instruction(CALLDATACOPY, Instruction::new(opcodes::calldatacopy), 3);
+        instructions.insert_instruction(CODECOPY, Instruction::new(opcodes::codecopy), 3);
+        instructions.insert_instruction(
+            RETURNDATACOPY,
+            Instruction::new(opcodes::returndatacopy),
+            3,
+        );
         instructions.insert_instruction(
             EXTCODECOPY,
-            Instruction::new(opcodes::extcodecopy, gas::WARM_STORAGE_READ_COST),
+            Instruction::new(opcodes::extcodecopy),
+            gas::WARM_STORAGE_READ_COST as u16,
         );
 
         // Log opcodes
-        instructions.insert_instruction(LOG0, Instruction::new(opcodes::log::<0, _>, gas::LOG));
-        instructions.insert_instruction(LOG1, Instruction::new(opcodes::log::<1, _>, gas::LOG));
-        instructions.insert_instruction(LOG2, Instruction::new(opcodes::log::<2, _>, gas::LOG));
-        instructions.insert_instruction(LOG3, Instruction::new(opcodes::log::<3, _>, gas::LOG));
-        instructions.insert_instruction(LOG4, Instruction::new(opcodes::log::<4, _>, gas::LOG));
+        instructions.insert_instruction(
+            LOG0,
+            Instruction::new(opcodes::log::<0, _>),
+            gas::LOG as u16,
+        );
+        instructions.insert_instruction(
+            LOG1,
+            Instruction::new(opcodes::log::<1, _>),
+            gas::LOG as u16,
+        );
+        instructions.insert_instruction(
+            LOG2,
+            Instruction::new(opcodes::log::<2, _>),
+            gas::LOG as u16,
+        );
+        instructions.insert_instruction(
+            LOG3,
+            Instruction::new(opcodes::log::<3, _>),
+            gas::LOG as u16,
+        );
+        instructions.insert_instruction(
+            LOG4,
+            Instruction::new(opcodes::log::<4, _>),
+            gas::LOG as u16,
+        );
 
         // Return opcodes
-        instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret, 0));
-        instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert, 0));
+        instructions.insert_instruction(RETURN, Instruction::new(opcodes::ret), 0);
+        instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert), 0);
     }
 
     instructions
