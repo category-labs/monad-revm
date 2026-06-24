@@ -39,7 +39,7 @@ pub fn monad_resize_memory<Memory: MemoryTr>(
     len: usize,
 ) -> Result<(), InstructionResult> {
     #[cfg(feature = "memory_limit")]
-    if memory.limit_reached(offset, len) {
+    if memory.limit_reached(num_words(offset.saturating_add(len))) {
         return Err(InstructionResult::MemoryLimitOOG);
     }
 
@@ -73,20 +73,16 @@ fn monad_resize_memory_cold<Memory: MemoryTr>(
 
 /// Resizes interpreter memory using the MIP-3 linear cost model.
 ///
-/// Halts the interpreter and returns `$ret` on failure.
+/// Returns the interpreter error on failure.
 macro_rules! resize_memory_mip3 {
     ($interpreter:expr, $offset:expr, $len:expr) => {
-        resize_memory_mip3!($interpreter, $offset, $len, ())
-    };
-    ($interpreter:expr, $offset:expr, $len:expr, $ret:expr) => {
         if let Err(result) = $crate::memory::monad_resize_memory(
             &mut $interpreter.gas,
             &mut $interpreter.memory,
             $offset,
             $len,
         ) {
-            $interpreter.halt(result);
-            return $ret;
+            return Err(result);
         }
     };
 }

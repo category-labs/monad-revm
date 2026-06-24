@@ -14,7 +14,7 @@ use revm::interpreter::{
         StackTr,
     },
     CallInput, CallInputs, CallScheme, CallValue, CreateInputs, InstructionContext,
-    InstructionResult, InterpreterAction,
+    InstructionExecResult as Result, InstructionResult, InterpreterAction,
 };
 use revm::{
     context_interface::{cfg::GasParams, host::LoadError, CreateScheme, Host},
@@ -25,7 +25,7 @@ use revm::{
 use std::boxed::Box;
 
 // Re-export internal macros / traits needed by revm_interpreter macros.
-use revm_interpreter::{_count, instructions::utility::IntoAddress};
+use revm_interpreter::instructions::utility::IntoAddress;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,14 +39,14 @@ fn monad_copy_cost_and_memory_resize(
     gas_params: &GasParams,
     memory_offset: U256,
     len: usize,
-) -> Option<usize> {
-    revm_interpreter::gas!(interpreter, gas_params.copy_cost(len), None);
+) -> Result<Option<usize>, InstructionResult> {
+    revm_interpreter::gas!(interpreter, gas_params.copy_cost(len));
     if len == 0 {
-        return None;
+        return Ok(None);
     }
-    let memory_offset = revm_interpreter::as_usize_or_fail_ret!(interpreter, memory_offset, None);
-    resize_memory_mip3!(interpreter, memory_offset, len, None);
-    Some(memory_offset)
+    let memory_offset = revm_interpreter::as_usize_or_fail!(interpreter, memory_offset);
+    resize_memory_mip3!(interpreter, memory_offset, len);
+    Ok(Some(memory_offset))
 }
 
 /// Return/revert helper using MIP-3 linear cost.
@@ -56,7 +56,7 @@ fn monad_copy_cost_and_memory_resize(
 fn monad_return_inner(
     interpreter: &mut Interpreter<impl InterpreterTypes>,
     instruction_result: InstructionResult,
-) {
+) -> Result {
     revm_interpreter::popn!([offset, len], interpreter);
     let len = revm_interpreter::as_usize_or_fail!(interpreter, len);
     let mut output = Bytes::default();
@@ -68,8 +68,7 @@ fn monad_return_inner(
             offset,
             len,
         ) {
-            interpreter.halt(result);
-            return;
+            return Err(result);
         }
         output = interpreter.memory.slice_len(offset, len).to_vec().into();
     }
@@ -79,6 +78,7 @@ fn monad_return_inner(
         output,
         interpreter.gas,
     ));
+    Err(instruction_result)
 }
 
 /// Memory input/output ranges for CALL instructions using MIP-3 linear cost.
@@ -89,8 +89,8 @@ fn monad_return_inner(
 fn monad_get_memory_input_and_out_ranges(
     interpreter: &mut Interpreter<impl InterpreterTypes>,
     _gas_params: &GasParams,
-) -> Option<(core::ops::Range<usize>, core::ops::Range<usize>)> {
-    revm_interpreter::popn!([in_offset, in_len, out_offset, out_len], interpreter, None);
+) -> Result<(core::ops::Range<usize>, core::ops::Range<usize>), InstructionResult> {
+    revm_interpreter::popn!([in_offset, in_len, out_offset, out_len], interpreter);
 
     let mut in_range = monad_call_resize_memory(interpreter, in_offset, in_len)?;
 
@@ -100,7 +100,7 @@ fn monad_get_memory_input_and_out_ranges(
     }
 
     let ret_range = monad_call_resize_memory(interpreter, out_offset, out_len)?;
-    Some((in_range, ret_range))
+    Ok((in_range, ret_range))
 }
 
 /// Memory input/output ranges for CALL instructions using the correct Monad memory model.
@@ -108,7 +108,7 @@ fn monad_get_memory_input_and_out_ranges(
 fn call_memory_input_and_out_ranges(
     interpreter: &mut Interpreter<impl InterpreterTypes>,
     gas_params: &GasParams,
-) -> Option<(core::ops::Range<usize>, core::ops::Range<usize>)> {
+) -> Result<(core::ops::Range<usize>, core::ops::Range<usize>), InstructionResult> {
     // MonadNine+ maps to SpecId::OSAKA. Opcode handlers only receive revm's
     // underlying SpecId, so use the runtime flag here instead of MonadHardfork.
     if interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::OSAKA) {
@@ -126,16 +126,16 @@ fn monad_call_resize_memory(
     interpreter: &mut Interpreter<impl InterpreterTypes>,
     offset: U256,
     len: U256,
-) -> Option<core::ops::Range<usize>> {
-    let len = revm_interpreter::as_usize_or_fail_ret!(interpreter, len, None);
+) -> Result<core::ops::Range<usize>, InstructionResult> {
+    let len = revm_interpreter::as_usize_or_fail!(interpreter, len);
     let offset = if len != 0 {
-        let offset = revm_interpreter::as_usize_or_fail_ret!(interpreter, offset, None);
-        resize_memory_mip3!(interpreter, offset, len, None);
+        let offset = revm_interpreter::as_usize_or_fail!(interpreter, offset);
+        resize_memory_mip3!(interpreter, offset, len);
         offset
     } else {
         usize::MAX
     };
-    Some(offset..offset + len)
+    Ok(offset..offset + len)
 }
 
 /// Calculates CALL gas and loads the code that will execute.
@@ -150,38 +150,28 @@ fn load_acc_and_calc_gas_with_bytecode_address<H: Host + ?Sized>(
     transfers_value: bool,
     create_empty_account: bool,
     stack_gas_limit: u64,
-) -> Option<(u64, Bytecode, B256, Address)> {
+) -> Result<(u64, Bytecode, B256, Address, bool), InstructionResult> {
     if transfers_value {
         revm_interpreter::gas!(
             context.interpreter,
-            context.host.gas_params().transfer_value_cost(),
-            None
+            context.host.gas_params().transfer_value_cost()
         );
     }
 
     let remaining_gas = context.interpreter.gas.remaining();
     let spec = context.interpreter.runtime_flag.spec_id();
-    let (gas, state_gas_cost, bytecode, code_hash, bytecode_address) = match load_account_delegated(
+    let (gas, state_gas_cost, bytecode, code_hash, bytecode_address) = load_account_delegated(
         context.host,
         spec,
         remaining_gas,
         to,
         transfers_value,
         create_empty_account,
-    ) {
-        Ok(out) => out,
-        Err(LoadError::ColdLoadSkipped) => {
-            context.interpreter.halt_oog();
-            return None;
-        }
-        Err(LoadError::DBError) => {
-            context.interpreter.halt_fatal();
-            return None;
-        }
-    };
+    )?;
+    let charged_new_account_state_gas = state_gas_cost > 0;
 
-    revm_interpreter::gas!(context.interpreter, gas, None);
-    revm_interpreter::state_gas!(context.interpreter, state_gas_cost, None);
+    revm_interpreter::gas!(context.interpreter, gas);
+    revm_interpreter::state_gas!(context.interpreter, state_gas_cost);
 
     let mut gas_limit =
         if context.interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::TANGERINE) {
@@ -193,13 +183,13 @@ fn load_acc_and_calc_gas_with_bytecode_address<H: Host + ?Sized>(
         } else {
             stack_gas_limit
         };
-    revm_interpreter::gas!(context.interpreter, gas_limit, None);
+    revm_interpreter::gas!(context.interpreter, gas_limit);
 
     if transfers_value {
         gas_limit = gas_limit.saturating_add(context.host.gas_params().call_stipend());
     }
 
-    Some((gas_limit, bytecode, code_hash, bytecode_address))
+    Ok((gas_limit, bytecode, code_hash, bytecode_address, charged_new_account_state_gas))
 }
 
 /// Loads an account and its delegated account, returning executable code and its address.
@@ -263,43 +253,55 @@ fn load_account_delegated<H: Host + ?Sized>(
 // ---------------------------------------------------------------------------
 
 /// MLOAD with MIP-3 linear memory cost.
-pub fn mload<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
+pub fn mload<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
     revm_interpreter::popn_top!([], top, context.interpreter);
     let offset = revm_interpreter::as_usize_or_fail!(context.interpreter, top);
     resize_memory_mip3!(context.interpreter, offset, 32);
     *top =
-        U256::try_from_be_slice(context.interpreter.memory.slice_len(offset, 32).as_ref()).unwrap()
+        U256::try_from_be_slice(context.interpreter.memory.slice_len(offset, 32).as_ref()).unwrap();
+    Ok(())
 }
 
 /// MSTORE with MIP-3 linear memory cost.
-pub fn mstore<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
+pub fn mstore<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
     revm_interpreter::popn!([offset, value], context.interpreter);
     let offset = revm_interpreter::as_usize_or_fail!(context.interpreter, offset);
     resize_memory_mip3!(context.interpreter, offset, 32);
     context.interpreter.memory.set(offset, &value.to_be_bytes::<32>());
+    Ok(())
 }
 
 /// MSTORE8 with MIP-3 linear memory cost.
-pub fn mstore8<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
+pub fn mstore8<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
     revm_interpreter::popn!([offset, value], context.interpreter);
     let offset = revm_interpreter::as_usize_or_fail!(context.interpreter, offset);
     resize_memory_mip3!(context.interpreter, offset, 1);
     context.interpreter.memory.set(offset, &[value.byte(0)]);
+    Ok(())
 }
 
 /// MCOPY with MIP-3 linear memory cost.
-pub fn mcopy<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
+pub fn mcopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
     revm_interpreter::check!(context.interpreter, CANCUN);
     revm_interpreter::popn!([dst, src, len], context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, len);
     revm_interpreter::gas!(context.interpreter, context.host.gas_params().mcopy_cost(len));
     if len == 0 {
-        return;
+        return Ok(());
     }
     let dst = revm_interpreter::as_usize_or_fail!(context.interpreter, dst);
     let src = revm_interpreter::as_usize_or_fail!(context.interpreter, src);
     resize_memory_mip3!(context.interpreter, max(dst, src), len);
     context.interpreter.memory.copy(dst, src, len);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +311,7 @@ pub fn mcopy<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionConte
 /// KECCAK256 with MIP-3 linear memory cost.
 pub fn keccak256<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn_top!([offset], top, context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, top);
     revm_interpreter::gas!(context.interpreter, context.host.gas_params().keccak256_cost(len));
@@ -323,6 +325,7 @@ pub fn keccak256<WIRE: InterpreterTypes, H: Host + ?Sized>(
         )
     };
     *top = hash.into();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +335,7 @@ pub fn keccak256<WIRE: InterpreterTypes, H: Host + ?Sized>(
 /// CALLDATACOPY with MIP-3 linear memory cost.
 pub fn calldatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn!([memory_offset, data_offset, len], context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, len);
     let Some(memory_offset) = monad_copy_cost_and_memory_resize(
@@ -340,8 +343,9 @@ pub fn calldatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
         context.host.gas_params(),
         memory_offset,
         len,
-    ) else {
-        return;
+    )?
+    else {
+        return Ok(());
     };
     let data_offset = revm_interpreter::as_usize_saturated!(data_offset);
     match context.interpreter.input.input() {
@@ -357,12 +361,13 @@ pub fn calldatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
             );
         }
     }
+    Ok(())
 }
 
 /// CODECOPY with MIP-3 linear memory cost.
 pub fn codecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn!([memory_offset, code_offset, len], context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, len);
     let Some(memory_offset) = monad_copy_cost_and_memory_resize(
@@ -370,8 +375,9 @@ pub fn codecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
         context.host.gas_params(),
         memory_offset,
         len,
-    ) else {
-        return;
+    )?
+    else {
+        return Ok(());
     };
     let code_offset = revm_interpreter::as_usize_saturated!(code_offset);
     context.interpreter.memory.set_data(
@@ -380,12 +386,13 @@ pub fn codecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
         len,
         context.interpreter.bytecode.bytecode_slice(),
     );
+    Ok(())
 }
 
 /// RETURNDATACOPY with MIP-3 linear memory cost.
 pub fn returndatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::check!(context.interpreter, BYZANTIUM);
     revm_interpreter::popn!([memory_offset, offset, len], context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, len);
@@ -393,8 +400,7 @@ pub fn returndatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
 
     let data_end = data_offset.saturating_add(len);
     if data_end > context.interpreter.return_data.buffer().len() {
-        context.interpreter.halt(InstructionResult::OutOfOffset);
-        return;
+        return Err(InstructionResult::OutOfOffset);
     }
 
     let Some(memory_offset) = monad_copy_cost_and_memory_resize(
@@ -402,8 +408,9 @@ pub fn returndatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
         context.host.gas_params(),
         memory_offset,
         len,
-    ) else {
-        return;
+    )?
+    else {
+        return Ok(());
     };
     context.interpreter.memory.set_data(
         memory_offset,
@@ -411,12 +418,13 @@ pub fn returndatacopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
         len,
         context.interpreter.return_data.buffer(),
     );
+    Ok(())
 }
 
 /// EXTCODECOPY with MIP-3 linear memory cost.
 pub fn extcodecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
     context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn!([address, memory_offset, code_offset, len_u256], context.interpreter);
     let address = address.into_address();
     let spec_id = context.interpreter.runtime_flag.spec_id();
@@ -431,18 +439,22 @@ pub fn extcodecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
     }
 
     let code = if spec_id.is_enabled_in(SpecId::BERLIN) {
-        let account = revm_interpreter::berlin_load_account!(context, address, true);
+        let cold_load_gas = context.host.gas_params().cold_account_additional_cost();
+        let skip_cold_load = context.interpreter.gas.remaining() < cold_load_gas;
+        let account =
+            context.host.load_account_info_skip_cold_load(address, true, skip_cold_load)?;
+        if account.is_cold {
+            revm_interpreter::gas!(context.interpreter, cold_load_gas);
+        }
         account.code.as_ref().unwrap().original_bytes()
     } else {
-        let Some(code) = context.host.load_account_code(address) else {
-            return context.interpreter.halt_fatal();
-        };
-        code.data
+        context.host.load_account_code(address).ok_or(InstructionResult::FatalExternalError)?.data
     };
 
     let code_offset_usize =
         core::cmp::min(revm_interpreter::as_usize_saturated!(code_offset), code.len());
     context.interpreter.memory.set_data(memory_offset_usize, code_offset_usize, len, &code);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +464,7 @@ pub fn extcodecopy<WIRE: InterpreterTypes, H: Host + ?Sized>(
 /// LOG with MIP-3 linear memory cost.
 pub fn log<const N: usize, H: Host + ?Sized>(
     context: InstructionContext<'_, H, impl InterpreterTypes>,
-) {
+) -> Result {
     revm_interpreter::require_non_staticcall!(context.interpreter);
     revm_interpreter::popn!([offset, len], context.interpreter);
     let len = revm_interpreter::as_usize_or_fail!(context.interpreter, len);
@@ -468,8 +480,7 @@ pub fn log<const N: usize, H: Host + ?Sized>(
         Bytes::copy_from_slice(context.interpreter.memory.slice_len(offset, len).as_ref())
     };
     let Some(topics) = context.interpreter.stack.popn::<N>() else {
-        context.interpreter.halt_underflow();
-        return;
+        return Err(InstructionResult::StackUnderflow);
     };
 
     let log = revm::primitives::Log {
@@ -478,6 +489,7 @@ pub fn log<const N: usize, H: Host + ?Sized>(
             .expect("LogData should have <=4 topics"),
     };
     context.host.log(log);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -504,24 +516,21 @@ fn target_is_delegated_account<WIRE: InterpreterTypes, H: Host + ?Sized>(
 /// standard revm memory expansion behavior.
 pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::require_non_staticcall!(context.interpreter);
     if IS_CREATE2 {
         revm_interpreter::check!(context.interpreter, PETERSBURG);
     }
     match target_is_delegated_account(&mut context) {
         Ok(true) => {
-            context.interpreter.halt(InstructionResult::NotActivated);
-            return;
+            return Err(InstructionResult::NotActivated);
         }
         Ok(false) => {}
         Err(LoadError::ColdLoadSkipped) => {
-            context.interpreter.halt_oog();
-            return;
+            return Err(InstructionResult::OutOfGas);
         }
         Err(LoadError::DBError) => {
-            context.interpreter.halt_fatal();
-            return;
+            return Err(InstructionResult::FatalExternalError);
         }
     }
 
@@ -532,8 +541,7 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
     if len != 0 {
         if context.interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::SHANGHAI) {
             if len > context.host.max_initcode_size() {
-                context.interpreter.halt(InstructionResult::CreateInitCodeSizeLimit);
-                return;
+                return Err(InstructionResult::CreateInitCodeSizeLimit);
             }
             revm_interpreter::gas!(
                 context.interpreter,
@@ -545,12 +553,7 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
         if context.interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::OSAKA) {
             resize_memory_mip3!(context.interpreter, code_offset, len);
         } else {
-            revm_interpreter::resize_memory!(
-                context.interpreter,
-                context.host.gas_params(),
-                code_offset,
-                len
-            );
+            context.interpreter.resize_memory(context.host.gas_params(), code_offset, len)?;
         }
 
         code =
@@ -582,6 +585,7 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
             context.interpreter.gas.reservoir(),
         )),
     )));
+    Err(InstructionResult::Suspend)
 }
 
 // ---------------------------------------------------------------------------
@@ -591,34 +595,27 @@ pub fn create<WIRE: InterpreterTypes, const IS_CREATE2: bool, H: Host + ?Sized>(
 /// CALL with spec-dependent memory expansion cost.
 pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn!([local_gas_limit, to, value], context.interpreter);
     let to = to.into_address();
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
     let has_transfer = !value.is_zero();
 
     if context.interpreter.runtime_flag.is_static() && has_transfer {
-        context.interpreter.halt(InstructionResult::CallNotAllowedInsideStatic);
-        return;
+        return Err(InstructionResult::CallNotAllowedInsideStatic);
     }
 
-    let Some((input, return_memory_offset)) =
-        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
-    else {
-        return;
-    };
+    let (input, return_memory_offset) =
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let Some((gas_limit, bytecode, bytecode_hash, bytecode_address)) =
+    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
         load_acc_and_calc_gas_with_bytecode_address(
             &mut context,
             to,
             has_transfer,
             true,
             local_gas_limit,
-        )
-    else {
-        return;
-    };
+        )?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -633,36 +630,32 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
             reservoir: context.interpreter.gas.reservoir(),
+            charged_new_account_state_gas,
         }),
     )));
+    Err(InstructionResult::Suspend)
 }
 
 /// CALLCODE with spec-dependent memory expansion cost.
 pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::popn!([local_gas_limit, to, value], context.interpreter);
     let to = Address::from_word(B256::from(to));
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
     let has_transfer = !value.is_zero();
 
-    let Some((input, return_memory_offset)) =
-        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
-    else {
-        return;
-    };
+    let (input, return_memory_offset) =
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let Some((gas_limit, bytecode, bytecode_hash, bytecode_address)) =
+    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
         load_acc_and_calc_gas_with_bytecode_address(
             &mut context,
             to,
             has_transfer,
             false,
             local_gas_limit,
-        )
-    else {
-        return;
-    };
+        )?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -677,36 +670,32 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
             reservoir: context.interpreter.gas.reservoir(),
+            charged_new_account_state_gas,
         }),
     )));
+    Err(InstructionResult::Suspend)
 }
 
 /// DELEGATECALL with spec-dependent memory expansion cost.
 pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::check!(context.interpreter, HOMESTEAD);
     revm_interpreter::popn!([local_gas_limit, to], context.interpreter);
     let to = Address::from_word(B256::from(to));
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
 
-    let Some((input, return_memory_offset)) =
-        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
-    else {
-        return;
-    };
+    let (input, return_memory_offset) =
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let Some((gas_limit, bytecode, bytecode_hash, bytecode_address)) =
+    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
         load_acc_and_calc_gas_with_bytecode_address(
             &mut context,
             to,
             false,
             false,
             local_gas_limit,
-        )
-    else {
-        return;
-    };
+        )?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -721,36 +710,32 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             is_static: context.interpreter.runtime_flag.is_static(),
             return_memory_offset,
             reservoir: context.interpreter.gas.reservoir(),
+            charged_new_account_state_gas,
         }),
     )));
+    Err(InstructionResult::Suspend)
 }
 
 /// STATICCALL with spec-dependent memory expansion cost.
 pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     mut context: InstructionContext<'_, H, WIRE>,
-) {
+) -> Result {
     revm_interpreter::check!(context.interpreter, BYZANTIUM);
     revm_interpreter::popn!([local_gas_limit, to], context.interpreter);
     let to = Address::from_word(B256::from(to));
     let local_gas_limit = u64::try_from(local_gas_limit).unwrap_or(u64::MAX);
 
-    let Some((input, return_memory_offset)) =
-        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())
-    else {
-        return;
-    };
+    let (input, return_memory_offset) =
+        call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let Some((gas_limit, bytecode, bytecode_hash, bytecode_address)) =
+    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
         load_acc_and_calc_gas_with_bytecode_address(
             &mut context,
             to,
             false,
             false,
             local_gas_limit,
-        )
-    else {
-        return;
-    };
+        )?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -765,8 +750,10 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             is_static: true,
             return_memory_offset,
             reservoir: context.interpreter.gas.reservoir(),
+            charged_new_account_state_gas,
         }),
     )));
+    Err(InstructionResult::Suspend)
 }
 
 // ---------------------------------------------------------------------------
@@ -774,12 +761,16 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
 // ---------------------------------------------------------------------------
 
 /// RETURN with MIP-3 linear memory cost.
-pub fn ret<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
-    monad_return_inner(context.interpreter, InstructionResult::Return);
+pub fn ret<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
+    monad_return_inner(context.interpreter, InstructionResult::Return)
 }
 
 /// REVERT with MIP-3 linear memory cost.
-pub fn revert<WIRE: InterpreterTypes, H: Host + ?Sized>(context: InstructionContext<'_, H, WIRE>) {
+pub fn revert<WIRE: InterpreterTypes, H: Host + ?Sized>(
+    context: InstructionContext<'_, H, WIRE>,
+) -> Result {
     revm_interpreter::check!(context.interpreter, BYZANTIUM);
-    monad_return_inner(context.interpreter, InstructionResult::Revert);
+    monad_return_inner(context.interpreter, InstructionResult::Revert)
 }

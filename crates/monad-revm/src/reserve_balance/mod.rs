@@ -135,6 +135,7 @@ mod tests {
             value,
             scheme,
             is_static,
+            charged_new_account_state_gas: false,
         }
     }
 
