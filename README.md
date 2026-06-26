@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/monad-revm/badge.svg)](https://docs.rs/monad-revm)
 [![License](https://img.shields.io/crates/l/monad-revm.svg)](LICENSE)
 
-`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, staking precompile support, and the Monad reserve-balance precompile.
+`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, MIP-3 memory accounting, Monad staking, and the Monad reserve-balance precompile.
 
 ## EVM Compatibility
 
@@ -44,6 +44,11 @@ Monad uses a different cold-access model and no gas refunds.
 | Runtime bytecode limit | 24KB | 128KB |
 | Initcode limit | 48KB | 256KB |
 | EIP-4844 blob tx | Supported | Rejected (`Eip4844NotSupported`) |
+| EIP-7702 system authority | Supported | Rejected for the system address |
+
+### MIP-3 memory model
+
+Monad replaces Ethereum's quadratic memory expansion formula with a linear `words / 2` cost and enforces an 8 MB pooled memory limit for MonadNine and later when the `memory_limit` feature is enabled. Explicit memory-limit overrides are preserved, so embedders can still configure lower or higher limits for specialized execution environments.
 
 ## Staking Precompile (`0x1000`)
 
@@ -88,6 +93,8 @@ Pool rewards use an accumulator model:
 See implementation constants in `src/staking/constants.rs`.
 
 ### Staking API surface in `monad-revm`
+
+The staking precompile is implemented for both read methods and state-mutating user/syscall methods. It is available at `0x1000`.
 
 ### Read methods
 
@@ -157,6 +164,7 @@ Block lifecycle helpers:
 Reader integration path:
 
 - `run_staking_with_reader(...)` supports environments that do not expose full `ContextTr`, and is used by `alloy-monad-evm` integration.
+- Delegated top-level calls and internal calls into the staking precompile are rejected to match Monad precompile call restrictions.
 
 ## Reserve Balance Precompile (`0x1001`)
 
@@ -164,6 +172,7 @@ Reader integration path:
 
 - Active on `MonadNine` and above.
 - Exposes reserve-balance state during transaction execution.
+- The precompile is available at `0x1001` and returns `None` before MonadNine.
 
 ### Solidity interface
 
@@ -185,6 +194,7 @@ interface IReserveBalance {
 
 - Only direct `CALL` is accepted.
 - `STATICCALL`, `DELEGATECALL`, and `CALLCODE` are rejected.
+- Delegated top-level calls and internal calls into the reserve-balance precompile are rejected.
 - Calldata must be exactly the 4-byte selector.
 - Nonzero `msg.value` is rejected.
 
@@ -207,7 +217,7 @@ Or from crates.io:
 
 ```toml
 [dependencies]
-monad-revm = "0.3.0"
+monad-revm = "0.4.0"
 ```
 
 ## Usage
@@ -300,8 +310,12 @@ monad-revm/
 
 ## Feature flags
 
-- `serde`: Enable serialization for `MonadHardfork`.
-- `alloy-evm`: Enable integration with `alloy_evm::precompiles::PrecompilesMap`.
+- `std`: Enable standard-library support for `monad-revm`, `revm`, and `alloy-sol-types`.
+- `serde`: Enable serialization for `MonadHardfork` and forward `serde` support to `revm`.
+- `memory_limit`: Enable the REVM memory-limit feature used by Monad's 8 MB pooled memory cap.
+- `optional_balance_check`, `optional_block_gas_limit`, `optional_no_base_fee`: Forward the matching optional execution controls to `revm`.
+- `c-kzg`, `secp256k1`, `portable`, `blst`: Forward the matching cryptography/portability features to `revm`.
+- `dev`: Enable development-oriented optional execution controls used by tests and local integrations.
 
 ## Integration layers
 

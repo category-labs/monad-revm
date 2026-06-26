@@ -5,7 +5,7 @@
 //! global memory cap shared across the call stack.
 //!
 //! The 8 MB limit and memory pooling are handled by REVM's existing
-//! [`SharedMemory`] infrastructure — see [`crate::cfg`] for the limit value.
+//! `SharedMemory` infrastructure — see [`crate::cfg`] for the limit value.
 //!
 //! This module provides a custom `monad_resize_memory` function and
 //! replacement opcode handlers that use the linear cost model.

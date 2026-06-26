@@ -50,7 +50,7 @@ pub mod global_slots {
 /// Base addresses for validator set storage arrays.
 /// These are StorageArray<u64_be> where:
 /// - Slot 0: length (u64, left-aligned)
-/// - Slot 1+i: element[i] (u64, left-aligned)
+/// - Slot `1 + i`: element `i` (u64, left-aligned)
 pub mod valset_slots {
     use revm::primitives::U256;
 
@@ -125,7 +125,7 @@ pub mod withdrawal_offsets {
 
 /// Generate storage key for validator execution data.
 ///
-/// Base key format: [namespace(1)][val_id(8)][padding(23)]
+/// Base key format: `namespace(1) || val_id(8) || padding(23)`.
 /// Slot is added numerically to the base key (goes to least significant position).
 pub fn validator_key(val_id: u64, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -137,7 +137,7 @@ pub fn validator_key(val_id: u64, slot: u8) -> U256 {
 
 /// Generate storage key for delegator data.
 ///
-/// Base key format: [namespace(1)][val_id(8)][address(20)][padding(3)]
+/// Base key format: `namespace(1) || val_id(8) || address(20) || padding(3)`.
 /// Slot is added numerically to the base key.
 pub fn delegator_key(val_id: u64, delegator: &Address, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -150,7 +150,7 @@ pub fn delegator_key(val_id: u64, delegator: &Address, slot: u8) -> U256 {
 
 /// Generate storage key for withdrawal request.
 ///
-/// Base key format: [namespace(1)][val_id(8)][address(20)][withdrawal_id(1)][padding(2)]
+/// Base key format: `namespace(1) || val_id(8) || address(20) || withdrawal_id(1) || padding(2)`.
 /// Slot is added numerically to the base key.
 pub fn withdrawal_key(val_id: u64, delegator: &Address, withdrawal_id: u8, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -164,7 +164,7 @@ pub fn withdrawal_key(val_id: u64, delegator: &Address, withdrawal_id: u8, slot:
 
 /// Generate storage key for consensus view (stake/commission snapshot).
 ///
-/// Base key format: [namespace(1)][val_id(8)][padding(23)]
+/// Base key format: `namespace(1) || val_id(8) || padding(23)`.
 /// Slot is added numerically to the base key.
 pub fn consensus_view_key(val_id: u64, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -176,7 +176,7 @@ pub fn consensus_view_key(val_id: u64, slot: u8) -> U256 {
 
 /// Generate storage key for snapshot view.
 ///
-/// Base key format: [namespace(1)][val_id(8)][padding(23)]
+/// Base key format: `namespace(1) || val_id(8) || padding(23)`.
 /// Slot is added numerically to the base key.
 pub fn snapshot_view_key(val_id: u64, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -188,7 +188,7 @@ pub fn snapshot_view_key(val_id: u64, slot: u8) -> U256 {
 
 /// Generate storage key for reward accumulator (reference-counted).
 ///
-/// Base key format: [namespace(1)][epoch(8)][val_id(8)][padding(15)]
+/// Base key format: `namespace(1) || epoch(8) || val_id(8) || padding(15)`.
 /// Slot 0: value (U256), Slot 1: refcount (u64, left-aligned)
 pub fn accumulator_key(epoch: u64, val_id: u64, slot: u8) -> U256 {
     let mut key = [0u8; 32];
@@ -200,7 +200,7 @@ pub fn accumulator_key(epoch: u64, val_id: u64, slot: u8) -> U256 {
 
 /// Generate storage key for validator ID lookup by secp address.
 ///
-/// Key format: [namespace(1)][address(20)][padding(11)]
+/// Key format: `namespace(1) || address(20) || padding(11)`.
 pub fn val_id_secp_key(address: &Address) -> U256 {
     let mut key = [0u8; 32];
     key[0] = namespace::VAL_ID_SECP;
@@ -210,7 +210,7 @@ pub fn val_id_secp_key(address: &Address) -> U256 {
 
 /// Generate storage key for validator ID lookup by BLS address.
 ///
-/// Key format: [namespace(1)][address(20)][padding(11)]
+/// Key format: `namespace(1) || address(20) || padding(11)`.
 pub fn val_id_bls_key(address: &Address) -> U256 {
     let mut key = [0u8; 32];
     key[0] = namespace::VAL_ID_BLS;
@@ -220,7 +220,7 @@ pub fn val_id_bls_key(address: &Address) -> U256 {
 
 /// Generate storage key for validator existence bitset bucket.
 ///
-/// Key format: [namespace(1)][bucket(31)]
+/// Key format: `namespace(1) || bucket(31)`.
 /// where bucket = val_id / 256. Bit position within the U256 bucket = val_id & 0xFF.
 pub fn bitset_bucket_key(val_id: u64) -> U256 {
     let bucket = val_id >> 8;

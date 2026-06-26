@@ -28,7 +28,7 @@ pub mod precompiles;
 pub mod reserve_balance;
 /// Monad specification identifiers and hardfork definitions.
 pub mod spec;
-/// Monad staking precompile (0x1000) - read-only view methods.
+/// Monad staking precompile (0x1000).
 pub mod staking;
 
 pub use api::*;

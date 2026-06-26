@@ -24,7 +24,7 @@
 //!
 //! In the Monad C++ execution client, `syscallReward` is invoked as a system
 //! transaction with `msg.value` = block reward (token minting). REVM's
-//! [`SystemCallEvm`] does not support value on system calls, so this helper
+//! [`revm::handler::system_call::SystemCallEvm`] does not support value on system calls, so this helper
 //! appends the block reward amount to the calldata as a 32-byte extension.
 //! The precompile handler detects this extended format and uses it for reward
 //! distribution.
