@@ -62,7 +62,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
     if is_delegated_call {
         return Ok(Some(InterpreterResult {
             result: InstructionResult::Revert,
-            gas: Gas::new_spent(inputs.gas_limit),
+            gas: Gas::new_spent_with_reservoir(inputs.gas_limit, inputs.reservoir),
             output: Bytes::new(),
         }));
     }
@@ -73,7 +73,7 @@ pub fn run_staking_precompile<CTX: ContextTr>(
     if inputs.scheme != CallScheme::Call || inputs.is_static {
         return Ok(Some(InterpreterResult {
             result: InstructionResult::Revert,
-            gas: Gas::new_spent(inputs.gas_limit),
+            gas: Gas::new_spent_with_reservoir(inputs.gas_limit, inputs.reservoir),
             output: Bytes::new(),
         }));
     }
@@ -1413,6 +1413,7 @@ mod tests {
             value,
             scheme,
             is_static,
+            charged_new_account_state_gas: false,
         }
     }
 

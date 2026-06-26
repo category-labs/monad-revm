@@ -24,7 +24,7 @@ use revm::{
         bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileHalt, PrecompileId,
         PrecompileOutput, PrecompileResult, Precompiles,
     },
-    primitives::{alloy_primitives::B512, hardfork::SpecId, Address, Bytes, B256},
+    primitives::{alloy_primitives::B512, Address, AddressSet, Bytes, B256},
 };
 use std::{boxed::Box, string::String};
 
@@ -247,14 +247,18 @@ pub struct MonadPrecompiles {
     inner: EthPrecompiles,
     /// Spec id of the precompile provider.
     spec: MonadHardfork,
+    /// Warm precompile addresses exposed to the journal.
+    warm_addresses: AddressSet,
 }
 
 impl MonadPrecompiles {
     /// Create a new precompile provider with the given spec.
     #[inline]
     pub fn new_with_spec(spec: MonadHardfork) -> Self {
+        let eth_spec = spec.into_eth_spec();
+
         // Start with Ethereum precompiles for the underlying spec
-        let mut precompiles = Precompiles::new(spec.into_eth_spec().into()).clone();
+        let mut precompiles = Precompiles::new(eth_spec.into()).clone();
 
         // Override with Monad-specific gas costs
         precompiles.extend([
@@ -269,12 +273,16 @@ impl MonadPrecompiles {
         // Add P256VERIFY precompile (RIP-7212 / EIP-7951)
         precompiles.extend([secp256r1::P256VERIFY_OSAKA]);
 
+        let mut warm_addresses = precompiles.addresses_set().clone();
+        warm_addresses.insert(staking::storage::STAKING_ADDRESS);
+        if MonadHardfork::MonadNine.is_enabled_in(spec) {
+            warm_addresses.insert(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
+        }
+
         Self {
-            inner: EthPrecompiles {
-                precompiles: Box::leak(Box::new(precompiles)),
-                spec: SpecId::default(),
-            },
+            inner: EthPrecompiles { precompiles: Box::leak(Box::new(precompiles)), spec: eth_spec },
             spec,
+            warm_addresses,
         }
     }
 
@@ -320,14 +328,8 @@ where
     }
 
     #[inline]
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        // Include staking precompile address along with standard ones
-        let mut addresses = vec![staking::storage::STAKING_ADDRESS];
-        if MonadHardfork::MonadNine.is_enabled_in(self.spec) {
-            addresses.push(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
-        }
-        addresses.extend(self.inner.warm_addresses());
-        Box::new(addresses.into_iter())
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.warm_addresses
     }
 
     #[inline]
