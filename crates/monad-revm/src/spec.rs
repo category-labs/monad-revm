@@ -2,6 +2,11 @@
 use core::{fmt, str::FromStr};
 use revm::primitives::hardfork::{SpecId, UnknownHardfork};
 
+/// Monad mainnet chain ID.
+pub const MONAD_MAINNET_CHAIN_ID: u64 = 143;
+/// Monad testnet chain ID.
+pub const MONAD_TESTNET_CHAIN_ID: u64 = 10143;
+
 /// Monad hardfork identifier.
 ///
 /// Variants are ordered by activation order. Lower discriminant = earlier hardfork.
@@ -41,6 +46,50 @@ impl MonadHardfork {
     /// i.e. it was activated at the same time or earlier.
     pub const fn is_enabled_in(self, other: Self) -> bool {
         self as u8 <= other as u8
+    }
+
+    /// Returns the active Monad hardfork at the given timestamp for the specified chain.
+    pub const fn from_chain_and_timestamp(chain_id: u64, timestamp: u64) -> Option<Self> {
+        match chain_id {
+            MONAD_MAINNET_CHAIN_ID => Some(Self::from_mainnet_timestamp(timestamp)),
+            MONAD_TESTNET_CHAIN_ID => Some(Self::from_testnet_timestamp(timestamp)),
+            _ => None,
+        }
+    }
+
+    /// Retrieves the activation timestamp for this hardfork on mainnet.
+    pub const fn mainnet_activation_timestamp(&self) -> Option<u64> {
+        match self {
+            Self::MonadEight => Some(1_763_649_000),
+            Self::MonadNine => Some(1_773_930_600),
+            Self::MonadNext => None,
+        }
+    }
+
+    /// Retrieves the activation timestamp for this hardfork on testnet.
+    pub const fn testnet_activation_timestamp(&self) -> Option<u64> {
+        match self {
+            Self::MonadEight => Some(1_763_562_600),
+            Self::MonadNine => Some(1_773_153_000),
+            Self::MonadNext => None,
+        }
+    }
+
+    const fn from_mainnet_timestamp(timestamp: u64) -> Self {
+        Self::from_timestamp(timestamp, 1_773_930_600)
+    }
+
+    const fn from_testnet_timestamp(timestamp: u64) -> Self {
+        Self::from_timestamp(timestamp, 1_773_153_000)
+    }
+
+    const fn from_timestamp(timestamp: u64, monad_nine_timestamp: u64) -> Self {
+        if timestamp >= monad_nine_timestamp {
+            Self::MonadNine
+        } else {
+            // Older Monad revisions are represented as MonadEight in monad-revm.
+            Self::MonadEight
+        }
     }
 }
 
@@ -174,5 +223,41 @@ mod tests {
         assert_eq!(spec_id, SpecId::PRAGUE);
         let spec_id: SpecId = MonadHardfork::MonadNine.into();
         assert_eq!(spec_id, SpecId::OSAKA);
+    }
+
+    #[test]
+    fn test_monad_hardfork_activation_timestamps() {
+        assert_eq!(MonadHardfork::MonadEight.mainnet_activation_timestamp(), Some(1_763_649_000));
+        assert_eq!(MonadHardfork::MonadNine.mainnet_activation_timestamp(), Some(1_773_930_600));
+        assert_eq!(MonadHardfork::MonadNext.mainnet_activation_timestamp(), None);
+
+        assert_eq!(MonadHardfork::MonadEight.testnet_activation_timestamp(), Some(1_763_562_600));
+        assert_eq!(MonadHardfork::MonadNine.testnet_activation_timestamp(), Some(1_773_153_000));
+        assert_eq!(MonadHardfork::MonadNext.testnet_activation_timestamp(), None);
+    }
+
+    #[test]
+    fn test_monad_hardfork_from_chain_and_timestamp() {
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_MAINNET_CHAIN_ID, 1_763_648_999),
+            Some(MonadHardfork::MonadEight)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_MAINNET_CHAIN_ID, 1_773_930_599),
+            Some(MonadHardfork::MonadEight)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_MAINNET_CHAIN_ID, 1_773_930_600),
+            Some(MonadHardfork::MonadNine)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_TESTNET_CHAIN_ID, 1_773_152_999),
+            Some(MonadHardfork::MonadEight)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_TESTNET_CHAIN_ID, 1_773_153_000),
+            Some(MonadHardfork::MonadNine)
+        );
+        assert_eq!(MonadHardfork::from_chain_and_timestamp(1, 1_773_153_000), None);
     }
 }
