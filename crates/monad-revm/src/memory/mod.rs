@@ -76,14 +76,12 @@ fn monad_resize_memory_cold<Memory: MemoryTr>(
 /// Returns the interpreter error on failure.
 macro_rules! resize_memory_mip3 {
     ($interpreter:expr, $offset:expr, $len:expr) => {
-        if let Err(result) = $crate::memory::monad_resize_memory(
+        $crate::memory::monad_resize_memory(
             &mut $interpreter.gas,
             &mut $interpreter.memory,
             $offset,
             $len,
-        ) {
-            return Err(result);
-        }
+        )?;
     };
 }
 

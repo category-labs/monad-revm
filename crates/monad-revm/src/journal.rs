@@ -44,7 +44,7 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     /// Creates a new Monad journal from an existing journal inner state.
-    pub fn new_with_inner(
+    pub const fn new_with_inner(
         database: DB,
         inner: JournalInner<JournalEntry>,
         reserve_balance: ReserveBalanceTracker,
