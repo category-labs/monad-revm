@@ -82,13 +82,13 @@ fn revert_error_result(gas_limit: u64, error: ReserveBalanceError) -> Interprete
     revert_result(gas_limit, Bytes::copy_from_slice(error.to_string().as_bytes()))
 }
 
-fn revert_result(gas_limit: u64, output: Bytes) -> InterpreterResult {
+const fn revert_result(gas_limit: u64, output: Bytes) -> InterpreterResult {
     let mut gas = Gas::new(gas_limit);
     let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult { result: InstructionResult::Revert, gas, output }
 }
 
-fn oog_result(gas_limit: u64) -> InterpreterResult {
+const fn oog_result(gas_limit: u64) -> InterpreterResult {
     let mut gas = Gas::new(gas_limit);
     let _ = gas.record_regular_cost(gas_limit);
     InterpreterResult { result: InstructionResult::PrecompileOOG, gas, output: Bytes::new() }

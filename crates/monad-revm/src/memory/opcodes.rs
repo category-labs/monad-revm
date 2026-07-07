@@ -62,14 +62,12 @@ fn monad_return_inner(
     let mut output = Bytes::default();
     if len != 0 {
         let offset = revm_interpreter::as_usize_or_fail!(interpreter, offset);
-        if let Err(result) = crate::memory::monad_resize_memory(
+        crate::memory::monad_resize_memory(
             &mut interpreter.gas,
             &mut interpreter.memory,
             offset,
             len,
-        ) {
-            return Err(result);
-        }
+        )?;
         output = interpreter.memory.slice_len(offset, len).to_vec().into();
     }
 
