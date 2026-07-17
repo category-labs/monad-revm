@@ -1,16 +1,13 @@
 // MonadEvm - wrapper around base Evm with Monad-specific types.
 use crate::{
-    instructions::{monad_instructions, MonadInstructions},
+    instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
     precompiles::MonadPrecompiles,
     MonadHardfork,
 };
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
     context_interface::ContextTr,
-    handler::{
-        evm::FrameTr, instructions::InstructionProvider, EthFrame, EvmTr, FrameInitOrResult,
-        ItemOrResult, PrecompileProvider,
-    },
+    handler::{evm::FrameTr, EthFrame, EvmTr, FrameInitOrResult, ItemOrResult, PrecompileProvider},
     inspector::{InspectorEvmTr, JournalExt},
     interpreter::{interpreter::EthInterpreter, InterpreterResult},
     Database, Inspector,
@@ -62,8 +59,8 @@ impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
 
 impl<CTX, INSP, I, P> InspectorEvmTr for MonadEvm<CTX, INSP, I, P>
 where
-    CTX: ContextTr<Journal: JournalExt> + ContextSetters,
-    I: InstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: JournalExt> + ContextSetters,
+    I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
     INSP: Inspector<CTX, I::InterpreterTypes>,
 {
@@ -98,8 +95,8 @@ where
 
 impl<CTX, INSP, I, P> EvmTr for MonadEvm<CTX, INSP, I, P, EthFrame<EthInterpreter>>
 where
-    CTX: ContextTr,
-    I: InstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>>,
+    I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
 {
     type Context = CTX;
@@ -133,6 +130,7 @@ where
         ItemOrResult<&mut Self::Frame, <Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
+        self.0.instruction.set_spec(self.0.ctx.cfg().spec());
         self.0.frame_init(frame_input)
     }
 
@@ -152,6 +150,11 @@ where
         Option<<Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
-        self.0.frame_return_result(result)
+        let result = self.0.frame_return_result(result)?;
+        if self.0.frame_stack.index().is_some() {
+            let spec = self.0.frame_stack.get().interpreter.runtime_flag.spec_id;
+            self.0.instruction.set_frame_spec(spec);
+        }
+        Ok(result)
     }
 }
