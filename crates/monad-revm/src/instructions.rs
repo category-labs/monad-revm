@@ -191,6 +191,8 @@ pub const WARM_STORAGE_READ_COST: u64 = 100;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "memory_limit")]
+    use crate::cfg::MONAD_MEMORY_LIMIT;
     use crate::{
         api::{
             builder::MonadBuilder,
@@ -203,6 +205,8 @@ mod tests {
         MonadCfgEnv,
     };
     use alloy_sol_types::SolCall;
+    #[cfg(feature = "memory_limit")]
+    use revm::context_interface::result::OutOfGasError;
     use revm::{
         bytecode::opcode,
         context::TxEnv,
@@ -479,9 +483,9 @@ mod tests {
         }
     }
 
-    fn store_at(offset: u16) -> Vec<u8> {
-        let mut code = vec![opcode::PUSH0, opcode::PUSH2];
-        code.extend_from_slice(&offset.to_be_bytes());
+    fn store_at(offset: u32) -> Vec<u8> {
+        let mut code = vec![opcode::PUSH0, opcode::PUSH3];
+        code.extend_from_slice(&offset.to_be_bytes()[1..]);
         code.extend_from_slice(&[opcode::MSTORE, opcode::STOP]);
         code
     }
@@ -508,10 +512,34 @@ mod tests {
         code
     }
 
+    #[cfg(feature = "memory_limit")]
+    fn call_and_return_success(target: Address) -> Vec<u8> {
+        let mut code = vec![
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH20,
+        ];
+        code.extend_from_slice(target.as_slice());
+        code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::CALL,
+            opcode::PUSH0,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::RETURN,
+        ]);
+        code
+    }
+
     fn run_frame_spec_transition(
         parent_spec: MonadHardfork,
         child_spec: MonadHardfork,
-        child_offset: u16,
+        child_offset: u32,
         parent_offset: u16,
     ) -> u64 {
         let caller = Address::from([0x11; 20]);
@@ -553,6 +581,87 @@ mod tests {
             "transitioning contract call should succeed: {parent_spec:?} -> {child_spec:?}"
         );
         result.tx_gas_used()
+    }
+
+    #[cfg(feature = "memory_limit")]
+    fn run_memory_limit_contract(offset: u32) -> ExecutionResult<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let contract = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(store_at(offset)))),
+        );
+
+        let mut cfg = MonadCfgEnv::new_with_spec(MonadHardfork::MonadNine);
+        cfg.0.memory_limit = 128 * 1024 * 1024;
+        let ctx = monad_context_with_db(db).with_cfg(cfg);
+        let mut evm = ctx.build_monad();
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(contract))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        evm.transact(tx).expect("memory limit contract should execute").result
+    }
+
+    #[cfg(feature = "memory_limit")]
+    fn run_frame_memory_limit_transition(
+        parent_spec: MonadHardfork,
+        child_spec: MonadHardfork,
+        child_offset: u32,
+    ) -> bool {
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let child = Address::from([0x33; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_and_return_success(child)))),
+        );
+        db.insert_account_info(
+            child,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(store_at(child_offset)))),
+        );
+
+        let mut cfg = MonadCfgEnv::new_with_spec(parent_spec);
+        cfg.0.memory_limit = 128 * 1024 * 1024;
+        cfg.0.tx_gas_limit_cap = Some(u64::MAX);
+        let ctx = monad_context_with_db(db).with_cfg(cfg);
+        let inspector = SwitchSpecInspector { target: child, spec: child_spec };
+        let mut evm = ctx.build_monad_with_inspector(inspector);
+        evm.ctx().block.basefee = 0;
+        evm.ctx().block.gas_limit = 300_000_000;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(300_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(tx).expect("transitioning contract call should execute");
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "transitioning contract call should succeed: {parent_spec:?} -> {child_spec:?}"
+        );
+        U256::from_be_slice(
+            result.output().expect("parent contract should return the child success flag").as_ref(),
+        ) == U256::from(1)
     }
 
     fn memory_expansion_delta(spec: MonadHardfork) -> u64 {
@@ -614,6 +723,54 @@ mod tests {
                 "parent frame should restore {parent_spec:?} memory pricing"
             );
         }
+    }
+
+    #[test]
+    #[cfg(feature = "memory_limit")]
+    fn test_monad_nine_clamps_materialized_memory_limit_at_protocol_boundary() {
+        let last_word_offset = MONAD_MEMORY_LIMIT as u32 - 32;
+        let at_limit_offset = MONAD_MEMORY_LIMIT as u32;
+
+        let below_limit = run_memory_limit_contract(last_word_offset);
+        assert!(
+            matches!(below_limit, ExecutionResult::Success { .. }),
+            "the last word ending at 8 MiB should fit"
+        );
+
+        let above_limit = run_memory_limit_contract(at_limit_offset);
+        assert!(
+            matches!(
+                above_limit,
+                ExecutionResult::Halt {
+                    reason: HaltReason::OutOfGas(OutOfGasError::MemoryLimit),
+                    ..
+                }
+            ),
+            "the first word ending above 8 MiB should exceed the memory limit"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "memory_limit")]
+    fn test_memory_limit_follows_frame_spec_transitions() {
+        let last_word_offset = MONAD_MEMORY_LIMIT as u32 - 32;
+        let at_limit_offset = MONAD_MEMORY_LIMIT as u32;
+
+        assert!(run_frame_memory_limit_transition(
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            last_word_offset,
+        ));
+        assert!(!run_frame_memory_limit_transition(
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            at_limit_offset,
+        ));
+        assert!(run_frame_memory_limit_transition(
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadEight,
+            at_limit_offset,
+        ));
     }
 
     #[test]
