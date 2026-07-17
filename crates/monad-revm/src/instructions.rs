@@ -1,16 +1,27 @@
 use crate::MonadHardfork;
 use revm::{
     context_interface::cfg::{GasId, GasParams},
-    handler::instructions::EthInstructions,
+    handler::instructions::{EthInstructions, InstructionProvider},
     interpreter::{
         instructions::{gas_table_spec, instruction_table, Instruction},
         interpreter::EthInterpreter,
         Host,
     },
+    primitives::hardfork::SpecId,
 };
 
 /// Type alias for Monad instructions.
 pub type MonadInstructions<CTX> = EthInstructions<EthInterpreter, CTX>;
+
+/// Instruction provider that follows Monad hardfork changes between frames.
+#[auto_impl::auto_impl(&mut, Box)]
+pub trait MonadInstructionProvider: InstructionProvider {
+    /// Selects the instructions for a Monad hardfork.
+    fn set_spec(&mut self, spec: MonadHardfork);
+
+    /// Selects the instructions for a frame's underlying Ethereum hardfork.
+    fn set_frame_spec(&mut self, spec: SpecId);
+}
 
 /// Monad-specific gas parameters for a given hardfork.
 /// Override Ethereum defaults with Monad's gas costs.
@@ -149,6 +160,23 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
     instructions
 }
 
+impl<CTX: Host> MonadInstructionProvider for MonadInstructions<CTX> {
+    fn set_spec(&mut self, spec: MonadHardfork) {
+        if self.spec != spec.into_eth_spec() {
+            *self = monad_instructions(spec);
+        }
+    }
+
+    fn set_frame_spec(&mut self, spec: SpecId) {
+        let spec = if spec.is_enabled_in(SpecId::OSAKA) {
+            MonadHardfork::MonadNine
+        } else {
+            MonadHardfork::MonadEight
+        };
+        self.set_spec(spec);
+    }
+}
+
 /// Monad cold storage access cost (SLOAD, SSTORE).
 /// Ethereum: 2100, Monad: 8100
 pub const COLD_SLOAD_COST: u64 = 8100;
@@ -164,7 +192,10 @@ pub const WARM_STORAGE_READ_COST: u64 = 100;
 mod tests {
     use super::*;
     use crate::{
-        api::{builder::MonadBuilder, default_ctx::monad_context_with_db},
+        api::{
+            builder::MonadBuilder,
+            default_ctx::{monad_context_with_db, MonadContext},
+        },
         reserve_balance::{
             abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
         },
@@ -172,16 +203,17 @@ mod tests {
         MonadCfgEnv,
     };
     use alloy_sol_types::SolCall;
-    use revm::primitives::hardfork::SpecId;
     use revm::{
         bytecode::opcode,
         context::TxEnv,
         context_interface::result::{ExecutionResult, HaltReason},
         database::InMemoryDB,
         handler::EvmTr,
-        primitives::{Address, Bytes, TxKind, U256},
+        inspector::InspectEvm,
+        interpreter::CallInputs,
+        primitives::{hardfork::SpecId, Address, Bytes, TxKind, U256},
         state::{AccountInfo, Bytecode},
-        ExecuteEvm,
+        ExecuteEvm, Inspector,
     };
 
     const DUPN_OPCODE: u8 = 0xE6;
@@ -426,6 +458,113 @@ mod tests {
         3 * words + words * words / 512
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct SwitchSpecInspector {
+        target: Address,
+        spec: MonadHardfork,
+    }
+
+    impl Inspector<MonadContext<InMemoryDB>> for SwitchSpecInspector {
+        fn call(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &mut CallInputs,
+        ) -> Option<revm::interpreter::CallOutcome> {
+            if inputs.target_address == self.target {
+                let mut cfg = context.cfg.clone().into_inner();
+                cfg.spec = self.spec;
+                context.cfg = MonadCfgEnv::from(cfg);
+            }
+            None
+        }
+    }
+
+    fn store_at(offset: u16) -> Vec<u8> {
+        let mut code = vec![opcode::PUSH0, opcode::PUSH2];
+        code.extend_from_slice(&offset.to_be_bytes());
+        code.extend_from_slice(&[opcode::MSTORE, opcode::STOP]);
+        code
+    }
+
+    fn call_then_store_at(target: Address, offset: u16) -> Vec<u8> {
+        let mut code = vec![
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH20,
+        ];
+        code.extend_from_slice(target.as_slice());
+        code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::CALL,
+            opcode::POP,
+            opcode::PUSH0,
+            opcode::PUSH2,
+        ]);
+        code.extend_from_slice(&offset.to_be_bytes());
+        code.extend_from_slice(&[opcode::MSTORE, opcode::STOP]);
+        code
+    }
+
+    fn run_frame_spec_transition(
+        parent_spec: MonadHardfork,
+        child_spec: MonadHardfork,
+        child_offset: u16,
+        parent_offset: u16,
+    ) -> u64 {
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let child = Address::from([0x33; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(
+                child,
+                parent_offset,
+            )))),
+        );
+        db.insert_account_info(
+            child,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(store_at(child_offset)))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector = SwitchSpecInspector { target: child, spec: child_spec };
+        let mut evm = ctx.build_monad_with_inspector(inspector);
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(tx).expect("transitioning contract call should execute");
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "transitioning contract call should succeed: {parent_spec:?} -> {child_spec:?}"
+        );
+        result.tx_gas_used()
+    }
+
+    fn memory_expansion_delta(spec: MonadHardfork) -> u64 {
+        let base_words = 1;
+        let expanded_words = (0x2000 + 0x20) / 32;
+        if MonadHardfork::MonadNine.is_enabled_in(spec) {
+            expanded_words / 2 - base_words / 2
+        } else {
+            standard_memory_cost(expanded_words) - standard_memory_cost(base_words)
+        }
+    }
+
     #[test]
     fn test_call_like_memory_expansion_cost_is_spec_dependent() {
         let expanded_words = (0x2000 + 0x20) / 32;
@@ -450,6 +589,29 @@ mod tests {
                 monad_nine_expanded - monad_nine_base,
                 mip3_cost,
                 "MonadNine should use MIP-3 memory expansion for opcode 0x{opcode:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_instruction_provider_follows_frame_spec_transitions() {
+        for (parent_spec, child_spec) in [
+            (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+        ] {
+            let base = run_frame_spec_transition(parent_spec, child_spec, 0, 0);
+            let child_expanded = run_frame_spec_transition(parent_spec, child_spec, 0x2000, 0);
+            assert_eq!(
+                child_expanded - base,
+                memory_expansion_delta(child_spec),
+                "child frame should use {child_spec:?} memory pricing"
+            );
+
+            let parent_expanded = run_frame_spec_transition(parent_spec, child_spec, 0, 0x2000);
+            assert_eq!(
+                parent_expanded - base,
+                memory_expansion_delta(parent_spec),
+                "parent frame should restore {parent_spec:?} memory pricing"
             );
         }
     }
