@@ -125,12 +125,13 @@ where
 
     fn frame_init(
         &mut self,
-        frame_input: <Self::Frame as FrameTr>::FrameInit,
+        mut frame_input: <Self::Frame as FrameTr>::FrameInit,
     ) -> Result<
         ItemOrResult<&mut Self::Frame, <Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
         self.0.instruction.set_spec(self.0.ctx.cfg().spec());
+        frame_input.memory.set_memory_limit(self.0.ctx.cfg().memory_limit());
         self.0.frame_init(frame_input)
     }
 

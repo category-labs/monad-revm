@@ -11,15 +11,8 @@ use revm::context_interface::cfg::GasParams;
 /// Monad transaction gas limit cap (30M gas).
 pub const MONAD_TX_GAS_LIMIT_CAP: u64 = 30_000_000;
 
-/// MIP-3: Maximum memory per transaction (8 MB), pooled across the call stack.
+/// MIP-3: Maximum memory per transaction (8 MiB), pooled across the call stack.
 pub const MONAD_MEMORY_LIMIT: u64 = 8 * 1024 * 1024;
-
-/// REVM's default memory limit (`2^32 - 1` bytes).
-///
-/// Used to recognize unnormalized `CfgEnv` values that should receive Monad's
-/// chain default.
-#[cfg(feature = "memory_limit")]
-const REVM_DEFAULT_MEMORY_LIMIT: u64 = (1 << 32) - 1;
 
 /// Monad maximum contract code size.
 ///
@@ -38,6 +31,7 @@ pub const MONAD_MAX_INITCODE_SIZE: usize = MONAD_MAX_CODE_SIZE * 2; // 256KB
 /// the `Cfg` trait with Monad-specific defaults for:
 /// - `max_code_size()`: Returns [`MONAD_MAX_CODE_SIZE`] (128KB) instead of EIP-170's 24KB
 /// - `max_initcode_size()`: Returns [`MONAD_MAX_INITCODE_SIZE`] (256KB) instead of EIP-3860's 48KB
+/// - `memory_limit()`: Clamps MonadNine+ execution to [`MONAD_MEMORY_LIMIT`] (8 MiB)
 ///
 /// All other configuration options are delegated to the inner `CfgEnv`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,16 +42,12 @@ impl MonadCfgEnv {
     /// Creates a new `MonadCfgEnv` with default Monad spec and Monad gas params.
     pub fn new() -> Self {
         let spec = MonadHardfork::default();
-        let mut cfg = CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec));
-        Self::apply_memory_limit_default(&mut cfg);
-        Self(cfg)
+        Self(CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec)))
     }
 
     /// Creates a new `MonadCfgEnv` with the specified spec and Monad gas params.
     pub fn new_with_spec(spec: MonadHardfork) -> Self {
-        let mut cfg = CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec));
-        Self::apply_memory_limit_default(&mut cfg);
-        Self(cfg)
+        Self(CfgEnv::new_with_spec_and_gas_params(spec, monad_gas_params(spec)))
     }
 
     /// Returns a reference to the inner `CfgEnv`.
@@ -80,19 +70,6 @@ impl MonadCfgEnv {
         self.0.chain_id = chain_id;
         self
     }
-
-    fn apply_memory_limit_default(_cfg: &mut CfgEnv<MonadHardfork>) {
-        #[cfg(feature = "memory_limit")]
-        {
-            let cfg = _cfg;
-            let inner_limit = <CfgEnv<MonadHardfork> as Cfg>::memory_limit(cfg);
-            if MonadHardfork::MonadNine.is_enabled_in(cfg.spec)
-                && inner_limit == REVM_DEFAULT_MEMORY_LIMIT
-            {
-                cfg.memory_limit = MONAD_MEMORY_LIMIT;
-            }
-        }
-    }
 }
 
 impl Default for MonadCfgEnv {
@@ -107,7 +84,6 @@ impl From<CfgEnv<MonadHardfork>> for MonadCfgEnv {
         // This ensures downstream consumers (alloy-monad-evm, monad-foundry)
         // automatically get Monad gas costs when converting.
         cfg.set_gas_params(monad_gas_params(cfg.spec));
-        Self::apply_memory_limit_default(&mut cfg);
         Self(cfg)
     }
 }
@@ -227,12 +203,10 @@ impl Cfg for MonadCfgEnv {
         let inner_limit = <CfgEnv<MonadHardfork> as Cfg>::memory_limit(&self.0);
         #[cfg(feature = "memory_limit")]
         {
-            // `MonadCfgEnv` is a public tuple wrapper and can also be deserialized,
-            // so callers can bypass constructors that normalize MonadNine+ defaults.
-            if MonadHardfork::MonadNine.is_enabled_in(self.0.spec)
-                && inner_limit == REVM_DEFAULT_MEMORY_LIMIT
-            {
-                return MONAD_MEMORY_LIMIT;
+            // Preserve the configured value so hardfork transitions can restore a
+            // larger pre-MIP-3 limit, while enforcing the protocol cap dynamically.
+            if MonadHardfork::MonadNine.is_enabled_in(self.0.spec) {
+                return inner_limit.min(MONAD_MEMORY_LIMIT);
             }
         }
         inner_limit
@@ -317,18 +291,27 @@ mod tests {
     fn test_memory_limit_defaults_to_monad_limit_for_monad_nine_and_next() {
         for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
             let cfg = MonadCfgEnv::new_with_spec(spec);
-            assert_eq!(cfg.0.memory_limit, MONAD_MEMORY_LIMIT);
             assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
         }
     }
 
     #[test]
     #[cfg(feature = "memory_limit")]
-    fn test_memory_limit_respects_explicit_override_for_monad_nine_and_next() {
+    fn test_memory_limit_respects_stricter_override_for_monad_nine_and_next() {
         for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
             let mut cfg = MonadCfgEnv::new_with_spec(spec);
             cfg.0.memory_limit = 16_000;
             assert_eq!(cfg.memory_limit(), 16_000);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "memory_limit")]
+    fn test_memory_limit_clamps_larger_override_for_monad_nine_and_next() {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+            let mut cfg = MonadCfgEnv::new_with_spec(spec);
+            cfg.0.memory_limit = 128 * 1024 * 1024;
+            assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
         }
     }
 
@@ -341,11 +324,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory_limit")]
-    fn test_from_cfg_env_applies_monad_memory_limit_default() {
+    fn test_from_cfg_env_applies_monad_memory_limit_cap() {
         for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
-            let cfg_env = CfgEnv::new_with_spec(spec);
+            let mut cfg_env = CfgEnv::new_with_spec(spec);
+            cfg_env.memory_limit = 128 * 1024 * 1024;
             let monad_cfg: MonadCfgEnv = cfg_env.into();
-            assert_eq!(monad_cfg.0.memory_limit, MONAD_MEMORY_LIMIT);
+            assert_eq!(monad_cfg.0.memory_limit, 128 * 1024 * 1024);
             assert_eq!(monad_cfg.memory_limit(), MONAD_MEMORY_LIMIT);
         }
     }
@@ -370,5 +354,19 @@ mod tests {
             assert_eq!(monad_cfg.0.memory_limit, 16_000);
             assert_eq!(monad_cfg.memory_limit(), 16_000);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "memory_limit")]
+    fn test_memory_limit_follows_hardfork_transitions() {
+        let mut cfg = MonadCfgEnv::new_with_spec(MonadHardfork::MonadEight);
+        cfg.0.memory_limit = 128 * 1024 * 1024;
+        assert_eq!(cfg.memory_limit(), 128 * 1024 * 1024);
+
+        cfg.0.spec = MonadHardfork::MonadNine;
+        assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
+
+        cfg.0.spec = MonadHardfork::MonadEight;
+        assert_eq!(cfg.memory_limit(), 128 * 1024 * 1024);
     }
 }
