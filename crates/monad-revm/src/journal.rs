@@ -28,6 +28,17 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 
     /// Returns the reserve-balance tracker mutably.
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker;
+
+    /// Returns whether transaction boundaries preserve the reserve-balance tracker.
+    fn preserves_reserve_balance_tracker(&self) -> bool {
+        false
+    }
+
+    /// Sets whether transaction boundaries preserve the reserve-balance tracker.
+    ///
+    /// This is intended for synthetic transactions that model an internal call while retaining
+    /// the enclosing protocol transaction's reserve-balance state.
+    fn set_preserve_reserve_balance_tracker(&mut self, _preserve: bool) {}
 }
 
 /// Monad journal wrapper.
@@ -35,6 +46,7 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 pub struct MonadJournal<DB: Database> {
     inner: Journal<DB>,
     reserve_balance: ReserveBalanceTracker,
+    preserve_reserve_balance_tracker: bool,
 }
 
 impl<DB: Database> MonadJournal<DB> {
@@ -49,7 +61,11 @@ impl<DB: Database> MonadJournal<DB> {
         inner: JournalInner<JournalEntry>,
         reserve_balance: ReserveBalanceTracker,
     ) -> Self {
-        Self { inner: Journal::new_with_inner(database, inner), reserve_balance }
+        Self {
+            inner: Journal::new_with_inner(database, inner),
+            reserve_balance,
+            preserve_reserve_balance_tracker: false,
+        }
     }
 
     fn on_transfer(&mut self, from: Address, to: Address) {
@@ -94,6 +110,14 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker {
         &mut self.reserve_balance
     }
+
+    fn preserves_reserve_balance_tracker(&self) -> bool {
+        self.preserve_reserve_balance_tracker
+    }
+
+    fn set_preserve_reserve_balance_tracker(&mut self, preserve: bool) {
+        self.preserve_reserve_balance_tracker = preserve;
+    }
 }
 
 impl<DB: Database> JournalExt for MonadJournal<DB> {
@@ -111,7 +135,11 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         DB: 'a;
 
     fn new(database: DB) -> Self {
-        Self { inner: Journal::new(database), reserve_balance: ReserveBalanceTracker::default() }
+        Self {
+            inner: Journal::new(database),
+            reserve_balance: ReserveBalanceTracker::default(),
+            preserve_reserve_balance_tracker: false,
+        }
     }
 
     fn db(&self) -> &Self::Database {
@@ -334,16 +362,22 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
 
     fn commit_tx(&mut self) {
         self.inner.commit_tx();
-        self.reserve_balance.clear();
+        if !self.preserve_reserve_balance_tracker {
+            self.reserve_balance.clear();
+        }
     }
 
     fn discard_tx(&mut self) {
         self.inner.discard_tx();
-        self.reserve_balance.clear();
+        if !self.preserve_reserve_balance_tracker {
+            self.reserve_balance.clear();
+        }
     }
 
     fn finalize(&mut self) -> Self::State {
-        self.reserve_balance.clear();
+        if !self.preserve_reserve_balance_tracker {
+            self.reserve_balance.clear();
+        }
         self.inner.finalize()
     }
 

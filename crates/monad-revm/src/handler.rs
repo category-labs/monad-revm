@@ -152,29 +152,35 @@ where
         self.load_accounts(evm)?;
         let gas = self.apply_eip7702_auth_list(evm, init_and_floor_gas)?;
 
-        let sender = evm.ctx().tx().caller();
-        let basefee = evm.ctx().block().basefee() as u128;
-        let effective_gas_price = evm.ctx().tx().effective_gas_price(basefee);
-        let gas_limit = evm.ctx().tx().gas_limit();
-        let spec = evm.ctx().cfg().spec();
-        let chain = evm.ctx().chain().clone();
-        let (sender_is_delegated, sender_account) = {
-            let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
-            (
-                sender_account.info.code.as_ref().is_some_and(revm::bytecode::Bytecode::is_eip7702),
-                sender_account.clone(),
-            )
-        };
+        if !evm.ctx().journal().preserves_reserve_balance_tracker() {
+            let sender = evm.ctx().tx().caller();
+            let basefee = evm.ctx().block().basefee() as u128;
+            let effective_gas_price = evm.ctx().tx().effective_gas_price(basefee);
+            let gas_limit = evm.ctx().tx().gas_limit();
+            let spec = evm.ctx().cfg().spec();
+            let chain = evm.ctx().chain().clone();
+            let (sender_is_delegated, sender_account) = {
+                let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
+                (
+                    sender_account
+                        .info
+                        .code
+                        .as_ref()
+                        .is_some_and(revm::bytecode::Bytecode::is_eip7702),
+                    sender_account.clone(),
+                )
+            };
 
-        evm.ctx().journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
-            chain: &chain,
-            spec,
-            sender,
-            effective_gas_price,
-            gas_limit,
-            sender_is_delegated,
-            sender_account: Some(&sender_account),
-        });
+            evm.ctx().journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
+                chain: &chain,
+                spec,
+                sender,
+                effective_gas_price,
+                gas_limit,
+                sender_is_delegated,
+                sender_account: Some(&sender_account),
+            });
+        }
         Ok(gas)
     }
 
@@ -302,6 +308,8 @@ mod tests {
     use crate::{
         api::builder::MonadBuilder,
         api::default_ctx::{monad_context_with_db, DefaultMonad},
+        reserve_balance::abi::{DIPPED_INTO_RESERVE_SELECTOR, RESERVE_BALANCE_ADDRESS},
+        MonadHardfork,
     };
     use revm::{
         context::{result::EVMError, Context, TxEnv},
@@ -311,9 +319,58 @@ mod tests {
         },
         database::InMemoryDB,
         inspector::NoOpInspector,
-        primitives::{Address, TxKind, B256},
+        primitives::{Address, Bytes, TxKind, B256},
         ExecuteEvm,
     };
+
+    #[test]
+    fn synthetic_transaction_preserves_reserve_balance_tracker() {
+        let sender = Address::from([0x11; 20]);
+        let tracked = Address::from([0x22; 20]);
+        let recipient = Address::from([0x33; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            sender,
+            revm::state::AccountInfo { balance: U256::MAX, ..Default::default() },
+        );
+        db.insert_account_info(
+            tracked,
+            revm::state::AccountInfo { balance: U256::from(1_000), ..Default::default() },
+        );
+
+        let mut ctx = monad_context_with_db(db);
+        let chain = ctx.chain().clone();
+        ctx.journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &chain,
+            spec: MonadHardfork::MonadNine,
+            sender,
+            effective_gas_price: 0,
+            gas_limit: 0,
+            sender_is_delegated: false,
+            sender_account: None,
+        });
+        ctx.journal_mut()
+            .transfer(tracked, recipient, U256::from(1))
+            .expect("transfer should succeed");
+        assert!(ctx.journal().reserve_balance().has_violation());
+        ctx.journal_mut().set_preserve_reserve_balance_tracker(true);
+
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+        let tx = TxEnv::builder()
+            .caller(sender)
+            .to(RESERVE_BALANCE_ADDRESS)
+            .data(Bytes::copy_from_slice(&DIPPED_INTO_RESERVE_SELECTOR))
+            .gas_limit(100_000)
+            .gas_price(0)
+            .build_fill();
+
+        let result = evm.transact(tx).expect("synthetic transaction should succeed");
+        let output = result.result.output().expect("precompile should return output");
+        assert_eq!(output[31], 1);
+        assert!(evm.ctx().journal().reserve_balance().has_violation());
+    }
 
     #[test]
     fn test_blob_transaction_rejected() {
