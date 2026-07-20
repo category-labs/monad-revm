@@ -368,8 +368,13 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
     }
 
     fn discard_tx(&mut self) {
+        let reverted_addresses = self.preserve_reserve_balance_tracker.then(|| {
+            self.inner.journal.iter().flat_map(reverted_addresses_from_entry).collect::<Vec<_>>()
+        });
         self.inner.discard_tx();
-        if !self.preserve_reserve_balance_tracker {
+        if let Some(reverted_addresses) = reverted_addresses {
+            self.reserve_balance.on_checkpoint_revert(reverted_addresses, &self.inner.state);
+        } else {
             self.reserve_balance.clear();
         }
     }
@@ -432,8 +437,11 @@ fn reverted_addresses_from_entry(entry: &JournalEntry) -> Vec<Address> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{reserve_balance::tracker::ReserveBalanceInit, MonadChainContext, MonadHardfork};
     use revm::{
-        context_interface::journaled_state::JournalCheckpoint, database_interface::EmptyDB,
+        context_interface::journaled_state::JournalCheckpoint,
+        database::{EmptyDB, InMemoryDB},
+        state::AccountInfo,
     };
 
     #[test]
@@ -457,5 +465,37 @@ mod tests {
         });
 
         assert!(journal.journal().is_empty());
+    }
+
+    #[test]
+    fn discarded_synthetic_transaction_reverts_tracker_changes() {
+        let sender = Address::from([0x11; 20]);
+        let tracked = Address::from([0x22; 20]);
+        let recipient = Address::from([0x33; 20]);
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            tracked,
+            AccountInfo { balance: U256::from(1_000), ..Default::default() },
+        );
+
+        let mut journal = MonadJournal::new(db);
+        let chain = MonadChainContext::default();
+        journal.reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &chain,
+            spec: MonadHardfork::MonadNine,
+            sender,
+            effective_gas_price: 0,
+            gas_limit: 0,
+            sender_is_delegated: false,
+            sender_account: None,
+        });
+        journal.set_preserve_reserve_balance_tracker(true);
+        journal.transfer(tracked, recipient, U256::from(1)).expect("transfer should succeed");
+        assert!(journal.reserve_balance().has_violation());
+
+        journal.discard_tx();
+
+        assert!(!journal.reserve_balance().has_violation());
+        assert!(journal.reserve_balance().tracking_enabled());
     }
 }
