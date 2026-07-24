@@ -198,6 +198,7 @@ mod tests {
             builder::MonadBuilder,
             default_ctx::{monad_context_with_db, MonadContext},
         },
+        precompiles::MonadPrecompiles,
         reserve_balance::{
             abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
         },
@@ -212,13 +213,14 @@ mod tests {
         context::TxEnv,
         context_interface::result::{ExecutionResult, HaltReason},
         database::InMemoryDB,
-        handler::EvmTr,
+        handler::{EvmTr, PrecompileProvider},
         inspector::InspectEvm,
-        interpreter::CallInputs,
-        primitives::{hardfork::SpecId, Address, Bytes, TxKind, U256},
+        interpreter::{CallInputs, InterpreterResult},
+        primitives::{hardfork::SpecId, Address, AddressSet, Bytes, TxKind, U256},
         state::{AccountInfo, Bytecode},
         ExecuteEvm, Inspector,
     };
+    use std::{cell::RefCell, rc::Rc};
 
     const DUPN_OPCODE: u8 = 0xE6;
     const SWAPN_OPCODE: u8 = 0xE7;
@@ -483,6 +485,37 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    struct TrackingPrecompiles {
+        inner: MonadPrecompiles,
+        selected_specs: Rc<RefCell<Vec<MonadHardfork>>>,
+    }
+
+    impl PrecompileProvider<MonadContext<InMemoryDB>> for TrackingPrecompiles {
+        type Output = InterpreterResult;
+
+        fn set_spec(&mut self, spec: MonadHardfork) -> bool {
+            self.selected_specs.borrow_mut().push(spec);
+            PrecompileProvider::<MonadContext<InMemoryDB>>::set_spec(&mut self.inner, spec)
+        }
+
+        fn run(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &CallInputs,
+        ) -> Result<Option<Self::Output>, String> {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::run(&mut self.inner, context, inputs)
+        }
+
+        fn warm_addresses(&self) -> &AddressSet {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::warm_addresses(&self.inner)
+        }
+
+        fn contains(&self, address: &Address) -> bool {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::contains(&self.inner, address)
+        }
+    }
+
     fn store_at(offset: u32) -> Vec<u8> {
         let mut code = vec![opcode::PUSH0, opcode::PUSH3];
         code.extend_from_slice(&offset.to_be_bytes()[1..]);
@@ -566,7 +599,12 @@ mod tests {
 
         let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
         let inspector = SwitchSpecInspector { target: child, spec: child_spec };
-        let mut evm = ctx.build_monad_with_inspector(inspector);
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = TrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(parent_spec),
+            selected_specs: Rc::clone(&selected_specs),
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
         evm.ctx().block.basefee = 0;
 
         let tx = TxEnv::builder()
@@ -579,6 +617,13 @@ mod tests {
         assert!(
             matches!(result, ExecutionResult::Success { .. }),
             "transitioning contract call should succeed: {parent_spec:?} -> {child_spec:?}"
+        );
+        assert!(
+            selected_specs
+                .borrow()
+                .windows(3)
+                .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
+            "precompile provider should follow and restore frame specs"
         );
         result.tx_gas_used()
     }
