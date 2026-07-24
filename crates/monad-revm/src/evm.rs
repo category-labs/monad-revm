@@ -6,7 +6,7 @@ use crate::{
 };
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
-    context_interface::ContextTr,
+    context_interface::{ContextTr, JournalTr},
     handler::{evm::FrameTr, EthFrame, EvmTr, FrameInitOrResult, ItemOrResult, PrecompileProvider},
     inspector::{InspectorEvmTr, JournalExt},
     interpreter::{interpreter::EthInterpreter, InterpreterResult},
@@ -21,7 +21,7 @@ pub struct MonadEvm<
     I = MonadInstructions<CTX>,
     P = MonadPrecompiles,
     F = EthFrame<EthInterpreter>,
->(pub Evm<CTX, INSP, I, P, F>);
+>(pub Evm<CTX, INSP, I, P, F>, Vec<MonadHardfork>);
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
@@ -30,25 +30,28 @@ where
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
         let spec = ctx.cfg().spec();
-        Self(Evm {
-            ctx,
-            inspector,
-            instruction: monad_instructions(spec),
-            precompiles: MonadPrecompiles::new_with_spec(spec),
-            frame_stack: FrameStack::new_prealloc(8),
-        })
+        Self(
+            Evm {
+                ctx,
+                inspector,
+                instruction: monad_instructions(spec),
+                precompiles: MonadPrecompiles::new_with_spec(spec),
+                frame_stack: FrameStack::new_prealloc(8),
+            },
+            Vec::with_capacity(8),
+        )
     }
 }
 
 impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
     /// Consume self and return a new EVM with given Inspector.
     pub fn with_inspector<OINSP>(self, inspector: OINSP) -> MonadEvm<CTX, OINSP, I, P> {
-        MonadEvm(self.0.with_inspector(inspector))
+        MonadEvm(self.0.with_inspector(inspector), self.1)
     }
 
     /// Consume self and return a new EVM with given Precompiles.
     pub fn with_precompiles<OP>(self, precompiles: OP) -> MonadEvm<CTX, INSP, I, OP> {
-        MonadEvm(self.0.with_precompiles(precompiles))
+        MonadEvm(self.0.with_precompiles(precompiles), self.1)
     }
 
     /// Consume self and return the inner Inspector.
@@ -130,9 +133,21 @@ where
         ItemOrResult<&mut Self::Frame, <Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
-        self.0.instruction.set_spec(self.0.ctx.cfg().spec());
+        let spec = self.0.ctx.cfg().spec();
+        if self.0.frame_stack.index().is_none() {
+            self.1.clear();
+        }
+
+        self.0.instruction.set_spec(spec);
+        if self.0.precompiles.set_spec(spec) {
+            self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
+        }
         frame_input.memory.set_memory_limit(self.0.ctx.cfg().memory_limit());
-        self.0.frame_init(frame_input)
+        let result = self.0.frame_init(frame_input)?;
+        if result.is_item() {
+            self.1.push(spec);
+        }
+        Ok(result)
     }
 
     fn frame_run(
@@ -151,10 +166,15 @@ where
         Option<<Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
+        if self.0.frame_stack.get().is_finished() {
+            self.1.pop();
+        }
         let result = self.0.frame_return_result(result)?;
-        if self.0.frame_stack.index().is_some() {
-            let spec = self.0.frame_stack.get().interpreter.runtime_flag.spec_id;
-            self.0.instruction.set_frame_spec(spec);
+        if let Some(spec) = self.1.last().copied() {
+            self.0.instruction.set_spec(spec);
+            if self.0.precompiles.set_spec(spec) {
+                self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
+            }
         }
         Ok(result)
     }
