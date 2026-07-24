@@ -1,6 +1,8 @@
 // MonadEvm - wrapper around base Evm with Monad-specific types.
 use crate::{
-    instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
+    instructions::{
+        monad_frame_spec, monad_instructions, MonadInstructionProvider, MonadInstructions,
+    },
     precompiles::MonadPrecompiles,
     MonadHardfork,
 };
@@ -21,7 +23,7 @@ pub struct MonadEvm<
     I = MonadInstructions<CTX>,
     P = MonadPrecompiles,
     F = EthFrame<EthInterpreter>,
->(pub Evm<CTX, INSP, I, P, F>, Vec<MonadHardfork>);
+>(pub Evm<CTX, INSP, I, P, F>);
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
@@ -30,28 +32,25 @@ where
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
         let spec = ctx.cfg().spec();
-        Self(
-            Evm {
-                ctx,
-                inspector,
-                instruction: monad_instructions(spec),
-                precompiles: MonadPrecompiles::new_with_spec(spec),
-                frame_stack: FrameStack::new_prealloc(8),
-            },
-            Vec::with_capacity(8),
-        )
+        Self(Evm {
+            ctx,
+            inspector,
+            instruction: monad_instructions(spec),
+            precompiles: MonadPrecompiles::new_with_spec(spec),
+            frame_stack: FrameStack::new_prealloc(8),
+        })
     }
 }
 
 impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
     /// Consume self and return a new EVM with given Inspector.
     pub fn with_inspector<OINSP>(self, inspector: OINSP) -> MonadEvm<CTX, OINSP, I, P> {
-        MonadEvm(self.0.with_inspector(inspector), self.1)
+        MonadEvm(self.0.with_inspector(inspector))
     }
 
     /// Consume self and return a new EVM with given Precompiles.
     pub fn with_precompiles<OP>(self, precompiles: OP) -> MonadEvm<CTX, INSP, I, OP> {
-        MonadEvm(self.0.with_precompiles(precompiles), self.1)
+        MonadEvm(self.0.with_precompiles(precompiles))
     }
 
     /// Consume self and return the inner Inspector.
@@ -134,20 +133,14 @@ where
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
         let spec = self.0.ctx.cfg().spec();
-        if self.0.frame_stack.index().is_none() {
-            self.1.clear();
-        }
-
         self.0.instruction.set_spec(spec);
-        if self.0.precompiles.set_spec(spec) {
+        let precompiles_changed = self.0.precompiles.set_spec(spec);
+        let precompiles_empty = self.0.ctx.journal().precompile_addresses().is_empty();
+        if precompiles_changed || precompiles_empty {
             self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
         }
         frame_input.memory.set_memory_limit(self.0.ctx.cfg().memory_limit());
-        let result = self.0.frame_init(frame_input)?;
-        if result.is_item() {
-            self.1.push(spec);
-        }
-        Ok(result)
+        self.0.frame_init(frame_input)
     }
 
     fn frame_run(
@@ -166,16 +159,47 @@ where
         Option<<Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
-        if self.0.frame_stack.get().is_finished() {
-            self.1.pop();
-        }
         let result = self.0.frame_return_result(result)?;
-        if let Some(spec) = self.1.last().copied() {
-            self.0.instruction.set_spec(spec);
+        if self.0.frame_stack.index().is_some() {
+            let eth_spec = self.0.frame_stack.get().interpreter.runtime_flag.spec_id;
+            let spec = monad_frame_spec(eth_spec);
+            self.0.instruction.set_frame_spec(eth_spec);
             if self.0.precompiles.set_spec(spec) {
                 self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
             }
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        api::{
+            builder::MonadBuilder,
+            default_ctx::{DefaultMonad, MonadContext},
+        },
+        reserve_balance::abi::RESERVE_BALANCE_ADDRESS,
+        staking::storage::STAKING_ADDRESS,
+    };
+    use revm::{
+        context_interface::{ContextTr, JournalTr},
+        database::EmptyDB,
+        handler::system_call::SystemCallEvm,
+        precompile::u64_to_address,
+    };
+
+    #[test]
+    fn test_fresh_system_call_warms_precompiles() {
+        let mut evm = MonadContext::<EmptyDB>::monad().build_monad();
+        assert!(evm.0.ctx.journal().precompile_addresses().is_empty());
+
+        evm.system_call_one(STAKING_ADDRESS, Default::default())
+            .expect("fresh system call should execute");
+
+        let precompiles = evm.0.ctx.journal().precompile_addresses();
+        assert!(precompiles.contains(&u64_to_address(1)));
+        assert!(precompiles.contains(&STAKING_ADDRESS));
+        assert!(precompiles.contains(&RESERVE_BALANCE_ADDRESS));
     }
 }

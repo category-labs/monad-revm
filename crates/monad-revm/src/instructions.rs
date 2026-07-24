@@ -23,6 +23,18 @@ pub trait MonadInstructionProvider: InstructionProvider {
     fn set_frame_spec(&mut self, spec: SpecId);
 }
 
+/// Maps a frame's Ethereum runtime spec to its Monad instruction and precompile behavior.
+///
+/// MonadNine and MonadNext currently share Osaka behavior, so an Osaka frame restores the
+/// MonadNine provider configuration.
+pub(crate) const fn monad_frame_spec(spec: SpecId) -> MonadHardfork {
+    if spec.is_enabled_in(SpecId::OSAKA) {
+        MonadHardfork::MonadNine
+    } else {
+        MonadHardfork::MonadEight
+    }
+}
+
 /// Monad-specific gas parameters for a given hardfork.
 /// Override Ethereum defaults with Monad's gas costs.
 ///
@@ -168,12 +180,7 @@ impl<CTX: Host> MonadInstructionProvider for MonadInstructions<CTX> {
     }
 
     fn set_frame_spec(&mut self, spec: SpecId) {
-        let spec = if spec.is_enabled_in(SpecId::OSAKA) {
-            MonadHardfork::MonadNine
-        } else {
-            MonadHardfork::MonadEight
-        };
-        self.set_spec(spec);
+        self.set_spec(monad_frame_spec(spec));
     }
 }
 
@@ -516,6 +523,41 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    struct FailingPrecompiles {
+        inner: TrackingPrecompiles,
+        fail_address: Address,
+        fail_next: bool,
+    }
+
+    impl PrecompileProvider<MonadContext<InMemoryDB>> for FailingPrecompiles {
+        type Output = InterpreterResult;
+
+        fn set_spec(&mut self, spec: MonadHardfork) -> bool {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::set_spec(&mut self.inner, spec)
+        }
+
+        fn run(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &CallInputs,
+        ) -> Result<Option<Self::Output>, String> {
+            if self.fail_next && inputs.bytecode_address == self.fail_address {
+                self.fail_next = false;
+                return Err("intentional precompile failure".into());
+            }
+            PrecompileProvider::<MonadContext<InMemoryDB>>::run(&mut self.inner, context, inputs)
+        }
+
+        fn warm_addresses(&self) -> &AddressSet {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::warm_addresses(&self.inner)
+        }
+
+        fn contains(&self, address: &Address) -> bool {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::contains(&self.inner, address)
+        }
+    }
+
     fn store_at(offset: u32) -> Vec<u8> {
         let mut code = vec![opcode::PUSH0, opcode::PUSH3];
         code.extend_from_slice(&offset.to_be_bytes()[1..]);
@@ -624,6 +666,59 @@ mod tests {
                 .windows(3)
                 .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
             "precompile provider should follow and restore frame specs"
+        );
+        result.tx_gas_used()
+    }
+
+    fn run_immediate_precompile_transition(
+        parent_spec: MonadHardfork,
+        child_spec: MonadHardfork,
+        parent_offset: u16,
+    ) -> u64 {
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let precompile = revm::precompile::u64_to_address(4);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(
+                precompile,
+                parent_offset,
+            )))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector = SwitchSpecInspector { target: precompile, spec: child_spec };
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = TrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(parent_spec),
+            selected_specs: Rc::clone(&selected_specs),
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(tx).expect("nested precompile call should execute");
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "nested precompile call should succeed: {parent_spec:?} -> {child_spec:?}"
+        );
+        assert!(
+            selected_specs
+                .borrow()
+                .windows(3)
+                .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
+            "precompile provider should restore the parent after an immediate result"
         );
         result.tx_gas_used()
     }
@@ -768,6 +863,89 @@ mod tests {
                 "parent frame should restore {parent_spec:?} memory pricing"
             );
         }
+    }
+
+    #[test]
+    fn test_immediate_precompile_restores_parent_frame_spec() {
+        for (parent_spec, child_spec) in [
+            (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+        ] {
+            let base = run_immediate_precompile_transition(parent_spec, child_spec, 0);
+            let parent_expanded =
+                run_immediate_precompile_transition(parent_spec, child_spec, 0x2000);
+            assert_eq!(
+                parent_expanded - base,
+                memory_expansion_delta(parent_spec),
+                "parent frame should restore {parent_spec:?} pricing after an immediate precompile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_frame_spec_is_reset_after_precompile_error() {
+        let parent_spec = MonadHardfork::MonadEight;
+        let child_spec = MonadHardfork::MonadNine;
+        let caller = Address::from([0x11; 20]);
+        let first = Address::from([0x22; 20]);
+        let second = Address::from([0x33; 20]);
+        let precompile = revm::precompile::u64_to_address(4);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            first,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(precompile, 0)))),
+        );
+        db.insert_account_info(
+            second,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(store_at(0)))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector = SwitchSpecInspector { target: precompile, spec: child_spec };
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = FailingPrecompiles {
+            inner: TrackingPrecompiles {
+                inner: MonadPrecompiles::new_with_spec(parent_spec),
+                selected_specs: Rc::clone(&selected_specs),
+            },
+            fail_address: precompile,
+            fail_next: true,
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+
+        let first_tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(first))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        assert!(evm.inspect_one_tx(first_tx).is_err());
+
+        let mut cfg = evm.ctx().cfg.clone().into_inner();
+        cfg.spec = parent_spec;
+        evm.ctx().cfg = MonadCfgEnv::from(cfg);
+        let second_tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(second))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(second_tx).expect("transaction after error should execute");
+        assert!(matches!(result, ExecutionResult::Success { .. }));
+        assert!(
+            selected_specs
+                .borrow()
+                .windows(3)
+                .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
+            "the next root frame should replace the failed child provider spec"
+        );
     }
 
     #[test]
