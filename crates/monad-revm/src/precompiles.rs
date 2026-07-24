@@ -24,9 +24,9 @@ use revm::{
         bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileHalt, PrecompileId,
         PrecompileOutput, PrecompileResult, Precompiles,
     },
-    primitives::{alloy_primitives::B512, Address, AddressSet, Bytes, B256},
+    primitives::{alloy_primitives::B512, Address, AddressSet, Bytes, OnceLock, B256},
 };
-use std::{boxed::Box, string::String};
+use std::string::String;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Monad Gas Constants
@@ -256,11 +256,39 @@ impl MonadPrecompiles {
     #[inline]
     pub fn new_with_spec(spec: MonadHardfork) -> Self {
         let eth_spec = spec.into_eth_spec();
+        let precompiles = monad_precompiles(spec);
 
-        // Start with Ethereum precompiles for the underlying spec
-        let mut precompiles = Precompiles::new(eth_spec.into()).clone();
+        let mut warm_addresses = precompiles.addresses_set().clone();
+        warm_addresses.insert(staking::storage::STAKING_ADDRESS);
+        if MonadHardfork::MonadNine.is_enabled_in(spec) {
+            warm_addresses.insert(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
+        }
 
-        // Override with Monad-specific gas costs
+        Self { inner: EthPrecompiles { precompiles, spec: eth_spec }, spec, warm_addresses }
+    }
+
+    /// Precompiles getter.
+    #[inline]
+    pub const fn precompiles(&self) -> &'static Precompiles {
+        self.inner.precompiles
+    }
+}
+
+fn monad_precompiles(spec: MonadHardfork) -> &'static Precompiles {
+    static MONAD_EIGHT: OnceLock<Precompiles> = OnceLock::new();
+    static MONAD_NINE: OnceLock<Precompiles> = OnceLock::new();
+    static MONAD_NEXT: OnceLock<Precompiles> = OnceLock::new();
+
+    let precompiles = match spec {
+        MonadHardfork::MonadEight => &MONAD_EIGHT,
+        MonadHardfork::MonadNine => &MONAD_NINE,
+        MonadHardfork::MonadNext => &MONAD_NEXT,
+    };
+    precompiles.get_or_init(|| {
+        // Start with Ethereum precompiles for the underlying spec.
+        let mut precompiles = Precompiles::new(spec.into_eth_spec().into()).clone();
+
+        // Override with Monad-specific gas costs.
         precompiles.extend([
             MONAD_ECRECOVER,
             MONAD_EC_ADD,
@@ -270,27 +298,10 @@ impl MonadPrecompiles {
             MONAD_POINT_EVALUATION,
         ]);
 
-        // Add P256VERIFY precompile (RIP-7212 / EIP-7951)
+        // Add P256VERIFY precompile (RIP-7212 / EIP-7951).
         precompiles.extend([secp256r1::P256VERIFY_OSAKA]);
-
-        let mut warm_addresses = precompiles.addresses_set().clone();
-        warm_addresses.insert(staking::storage::STAKING_ADDRESS);
-        if MonadHardfork::MonadNine.is_enabled_in(spec) {
-            warm_addresses.insert(reserve_balance::abi::RESERVE_BALANCE_ADDRESS);
-        }
-
-        Self {
-            inner: EthPrecompiles { precompiles: Box::leak(Box::new(precompiles)), spec: eth_spec },
-            spec,
-            warm_addresses,
-        }
-    }
-
-    /// Precompiles getter.
-    #[inline]
-    pub const fn precompiles(&self) -> &'static Precompiles {
-        self.inner.precompiles
-    }
+        precompiles
+    })
 }
 
 impl<CTX> PrecompileProvider<CTX> for MonadPrecompiles
@@ -350,6 +361,9 @@ impl Default for MonadPrecompiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::default_ctx::MonadContext;
+    use core::ptr;
+    use revm::database::InMemoryDB;
     use revm::precompile::{self, PrecompileHalt, PrecompileStatus};
     use revm::primitives::{hex, U256};
 
@@ -381,6 +395,29 @@ mod tests {
         assert_eq!(MONAD_EC_PAIRING_PER_POINT_GAS, 170_000);
         assert_eq!(MONAD_BLAKE2F_ROUND_GAS, 2);
         assert_eq!(MONAD_POINT_EVALUATION_GAS, 200_000);
+    }
+
+    #[test]
+    fn test_monad_precompile_maps_are_reused_across_transitions() {
+        let eight = MonadPrecompiles::new_with_spec(MonadHardfork::MonadEight).precompiles();
+        let nine = MonadPrecompiles::new_with_spec(MonadHardfork::MonadNine).precompiles();
+        let next = MonadPrecompiles::new_with_spec(MonadHardfork::MonadNext).precompiles();
+        assert!(!ptr::eq(eight, nine));
+        assert!(!ptr::eq(nine, next));
+
+        let mut provider = MonadPrecompiles::new_with_spec(MonadHardfork::MonadEight);
+        for _ in 0..64 {
+            assert!(PrecompileProvider::<MonadContext<InMemoryDB>>::set_spec(
+                &mut provider,
+                MonadHardfork::MonadNine,
+            ));
+            assert!(ptr::eq(provider.precompiles(), nine));
+            assert!(PrecompileProvider::<MonadContext<InMemoryDB>>::set_spec(
+                &mut provider,
+                MonadHardfork::MonadEight,
+            ));
+            assert!(ptr::eq(provider.precompiles(), eight));
+        }
     }
 
     #[test]
