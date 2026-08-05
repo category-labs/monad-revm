@@ -11,6 +11,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Changed
 
+- Relicensed the crate from MIT to GPL-3.0-only, matching the Monad repository.
 - Updated the public integration surface to REVM 41.
 - Selected Monad instructions, precompiles, warm addresses, and memory limits for each call frame.
 - Enforced MonadNine's 8 MiB pooled memory cap against configured execution limits.
