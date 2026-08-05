@@ -6,6 +6,12 @@
 //! - Custom gas costs
 //! - Custom code size limits (128KB max code, 256KB max initcode)
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
 /// API module for building and executing Monad EVM.
 pub mod api;
 /// Configuration module for Monad-specific settings.

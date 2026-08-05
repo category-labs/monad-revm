@@ -1,6 +1,8 @@
 //! Monad journal wrapper with reserve-balance tracking.
 
 use crate::reserve_balance::tracker::ReserveBalanceTracker;
+use alloc::{vec, vec::Vec};
+use core::ops::{Deref, DerefMut};
 use revm::{
     bytecode::Bytecode,
     context::{journal::JournalInner, Journal},
@@ -19,7 +21,6 @@ use revm::{
     },
     state::{Account, EvmState},
 };
-use std::ops::{Deref, DerefMut};
 
 /// Monad journal extension used by reserve-balance-aware execution.
 pub trait MonadJournalTr: JournalTr<State = EvmState> {

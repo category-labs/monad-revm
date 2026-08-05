@@ -212,6 +212,7 @@ mod tests {
         staking::{interface::IMonadStaking::getEpochCall, storage::STAKING_ADDRESS},
         MonadCfgEnv,
     };
+    use alloc::{string::String, vec, vec::Vec};
     use alloy_sol_types::SolCall;
     #[cfg(feature = "memory_limit")]
     use revm::context_interface::result::OutOfGasError;

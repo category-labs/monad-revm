@@ -142,6 +142,7 @@ pub mod name {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn test_monad_hardfork_default() {

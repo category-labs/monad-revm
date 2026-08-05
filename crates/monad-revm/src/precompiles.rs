@@ -16,6 +16,7 @@
 //! *Base cost per operation
 
 use crate::{api::exec::MonadContextTr, reserve_balance, staking, MonadHardfork};
+use alloc::string::String;
 use revm::{
     context::Cfg,
     handler::{EthPrecompiles, PrecompileProvider},
@@ -26,7 +27,6 @@ use revm::{
     },
     primitives::{alloy_primitives::B512, Address, AddressSet, Bytes, OnceLock, B256},
 };
-use std::string::String;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Monad Gas Constants
@@ -362,6 +362,7 @@ impl Default for MonadPrecompiles {
 mod tests {
     use super::*;
     use crate::api::default_ctx::MonadContext;
+    use alloc::{vec, vec::Vec};
     use core::ptr;
     use revm::database::InMemoryDB;
     use revm::precompile::{self, PrecompileHalt, PrecompileStatus};
