@@ -1,12 +1,11 @@
 //! Monad-specific EVM implementation.
 //!
 //! This crate provides Monad-specific customizations for REVM:
-//! - Gas limit charging (no refunds)
-//! - Custom precompiles (including staking at 0x1000)
-//! - Custom gas costs
-//! - Custom code size limits (128KB max code, 256KB max initcode)
+//! - Full gas-limit charging without refunds
+//! - Monad opcode gas and bytecode size limits
+//! - MIP-3 memory pricing and feature-gated pooled memory limits
 //! - Per-frame Monad hardfork instruction and precompile selection
-//! - Staking and reserve-balance protocol precompiles
+//! - Repriced and Monad-specific protocol precompiles
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -28,7 +27,7 @@ pub mod handler;
 pub mod instructions;
 /// Monad journal wrapper with reserve-balance tracking.
 pub mod journal;
-/// MIP-3: Linear memory cost model with 8 MB pooled limit.
+/// MIP-3 linear memory costs with a feature-gated 8 MiB pooled limit.
 pub mod memory;
 /// Monad precompiles with custom gas pricing.
 pub mod precompiles;
@@ -40,10 +39,7 @@ pub mod spec;
 pub mod staking;
 
 pub use api::*;
-pub use cfg::{
-    MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE, MONAD_MEMORY_LIMIT,
-    MONAD_TX_GAS_LIMIT_CAP,
-};
+pub use cfg::{MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE};
 pub use chain::MonadChainContext;
 pub use evm::MonadEvm;
 pub use journal::{MonadJournal, MonadJournalTr};

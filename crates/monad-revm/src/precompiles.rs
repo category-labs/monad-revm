@@ -11,7 +11,7 @@
 //! | ecPairing   | 0x08    | 45,000*  | 225,000*| 5x         |
 //! | blake2f     | 0x09    | rounds×1 | rounds×2| 2x         |
 //! | point eval  | 0x0a    | 50,000   | 200,000 | 4x         |
-//! | P256VERIFY  | 0x0100  | N/A      | 6,900   | Monad-only |
+//! | P256VERIFY  | 0x0100  | 6,900 (Osaka) | 6,900 | Enabled in MonadEight+ |
 //! | staking     | 0x1000  | N/A      | varies  | Monad-only |
 //! | reserve     | 0x1001  | N/A      | 100      | Monad-only |
 //!

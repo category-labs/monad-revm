@@ -55,7 +55,7 @@ limit. Unless explicitly overridden, transactions are capped at 30 million gas.
 | `ecPairing` | `0x08` | 45,000 + 34,000/pt | 225,000 + 170,000/pt | 5x |
 | `blake2f` | `0x09` | rounds × 1 | rounds × 2 | 2x |
 | KZG point evaluation | `0x0a` | 50,000 | 200,000 | 4x |
-| P256VERIFY | `0x0100` | N/A | 6,900 | Monad-only |
+| P256VERIFY | `0x0100` | 6,900 (Osaka) | 6,900 (`MonadEight`+) | Enabled early |
 
 ### Bytecode and transaction rules
 
@@ -245,9 +245,10 @@ The default maximum reserve balance is 10 MON.
 
 The standard transaction handler initializes and clears `ReserveBalanceTracker` at transaction
 boundaries. Embedders that execute a synthetic transaction as an enclosing call must set
-`MonadJournalTr::set_preserve_reserve_balance_tracker(true)` first. If active fork or journal state
-and chain metadata are replaced, call `ReserveBalanceTracker::rebase` with the replacement state
-and `MonadChainContext`; cached thresholds from the previous state must not be reused.
+`MonadJournalTr::set_preserve_reserve_balance_tracker(true)` only for that synthetic execution and
+restore it to `false` before the next ordinary transaction. If the backing fork, journal state, or
+chain metadata is replaced while a tracker is preserved, call `ReserveBalanceTracker::rebase` with
+the replacement state and `MonadChainContext`; cached thresholds must not cross that boundary.
 
 ## Installation
 
@@ -256,6 +257,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 monad-revm = "0.5.0"
+revm = "41.0.0"
 ```
 
 To pin directly to the matching immutable Git release:
@@ -263,6 +265,7 @@ To pin directly to the matching immutable Git release:
 ```toml
 [dependencies]
 monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.5.0" }
+revm = "41.0.0"
 ```
 
 ## Usage
@@ -295,13 +298,14 @@ let tx = TxEnv::builder()
     .caller(caller)
     .kind(TxKind::Call(recipient))
     .gas_limit(21_000)
-    .gas_price(0)
+    .gas_price(1)
     .build_fill();
 
 let result = evm.transact(tx).expect("transaction should execute");
 ```
 
-The same program is available as [`basic.rs`](crates/monad-revm/examples/basic.rs).
+The same program is available as
+[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.5.0/crates/monad-revm/examples/basic.rs).
 
 ### With inspector
 
@@ -329,6 +333,10 @@ let mut evm = context.build_monad();
 monad-revm/
 ├── crates/
 │   └── monad-revm/
+│       ├── Cargo.toml
+│       ├── LICENSE
+│       ├── examples/
+│       │   └── basic.rs
 │       └── src/
 │           ├── lib.rs
 │           ├── chain.rs
@@ -361,6 +369,9 @@ monad-revm/
 │               ├── interface.rs
 │               ├── storage.rs
 │               └── types.rs
+├── CHANGELOG.md
+├── LICENSE
+├── README.md
 └── Cargo.toml
 ```
 
