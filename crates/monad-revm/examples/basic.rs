@@ -26,7 +26,7 @@ fn main() {
         .caller(caller)
         .kind(TxKind::Call(recipient))
         .gas_limit(21_000)
-        .gas_price(0)
+        .gas_price(1)
         .build_fill();
 
     let _result = evm.transact(tx).expect("transaction should execute");

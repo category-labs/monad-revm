@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to `monad-revm` are documented in this file.
+Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
-## [0.5.0] - 2026-08-05
+## [0.5.0] - Unreleased
 
 ### Added
 

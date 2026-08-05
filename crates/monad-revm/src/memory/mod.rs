@@ -1,4 +1,4 @@
-//! MIP-3: Linear memory cost model with an 8 MiB pooled transaction limit.
+//! MIP-3 linear memory costs with a feature-gated 8 MiB pooled transaction limit.
 //!
 //! Replaces the Ethereum quadratic memory cost formula (`3·n + n²/512`) with
 //! a linear formula (`n / 2`, where n = word count). With the `memory_limit`
@@ -29,8 +29,8 @@ pub const fn monad_memory_cost(num_words: usize) -> u64 {
 /// Drop-in replacement for [`revm::interpreter::interpreter::resize_memory`]
 /// that charges `new_words >> 1` instead of `3·n + n²/512`.
 ///
-/// The 8 MB pooled limit is still enforced by the `memory_limit` feature
-/// through [`MemoryTr::limit_reached`].
+/// The 8 MiB pooled limit is still enforced by the `memory_limit` feature
+/// through `MemoryTr::limit_reached`.
 #[inline]
 pub fn monad_resize_memory<Memory: MemoryTr>(
     gas: &mut Gas,
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(monad_memory_cost(2), 1);
         // 10 words → 5 gas
         assert_eq!(monad_memory_cost(10), 5);
-        // 8 MB = 262_144 words → 131_072 gas
+        // 8 MiB = 262_144 words → 131_072 gas
         assert_eq!(monad_memory_cost(262_144), 131_072);
     }
 
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_monad_vs_eth_memory_cost() {
-        // Ethereum cost at 8 MB (262_144 words):
+        // Ethereum cost at 8 MiB (262_144 words):
         // 3 * 262_144 + 262_144² / 512 = 786_432 + 134_217_728 = 135_004_160
         let eth_cost = 3u64 * 262_144 + (262_144u64 * 262_144) / 512;
         let monad_cost = monad_memory_cost(262_144);

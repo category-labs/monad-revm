@@ -38,7 +38,8 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Sets whether transaction boundaries preserve the reserve-balance tracker.
     ///
     /// This is intended for synthetic transactions that model an internal call while retaining
-    /// the enclosing protocol transaction's reserve-balance state.
+    /// the enclosing protocol transaction's reserve-balance state. Restore this to `false` before
+    /// executing the next ordinary transaction.
     fn set_preserve_reserve_balance_tracker(&mut self, _preserve: bool) {}
 }
 
