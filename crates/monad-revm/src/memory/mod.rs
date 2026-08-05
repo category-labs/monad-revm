@@ -1,10 +1,10 @@
-//! MIP-3: Linear memory cost model with 8 MB pooled transaction limit.
+//! MIP-3: Linear memory cost model with an 8 MiB pooled transaction limit.
 //!
 //! Replaces the Ethereum quadratic memory cost formula (`3·n + n²/512`) with
-//! a linear formula (`n / 2`, where n = word count) and enforces an 8 MB
-//! global memory cap shared across the call stack.
+//! a linear formula (`n / 2`, where n = word count). With the `memory_limit`
+//! feature, MonadNine and later enforce an 8 MiB global cap shared across the call stack.
 //!
-//! The 8 MB limit and memory pooling are handled by REVM's existing
+//! The 8 MiB limit and memory pooling are handled by REVM's existing
 //! `SharedMemory` infrastructure — see [`crate::cfg`] for the limit value.
 //!
 //! This module provides a custom `monad_resize_memory` function and
@@ -18,7 +18,7 @@ use revm::interpreter::{
 
 /// MIP-3 memory expansion cost: `num_words / 2`.
 ///
-/// For 8 MB (262 144 words) the total cost is 131 072 gas.
+/// For 8 MiB (262 144 words) the total cost is 131 072 gas.
 #[inline]
 pub const fn monad_memory_cost(num_words: usize) -> u64 {
     (num_words as u64) >> 1

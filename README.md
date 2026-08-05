@@ -10,21 +10,40 @@
 
 | Component | Version |
 |-----------|---------|
-| **revm** | v38.0.0 |
+| **revm** | v41.0.0 |
 | **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadNext` |
-| **Default Monad spec** | `MonadNine` (Osaka-compatible with Monad-specific exclusions) |
+| **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine` and `MonadNext` |
+| **Default Monad spec** | `MonadNine` |
+
+The Ethereum spec is a foundation for instruction and precompile selection, not a claim of
+protocol equivalence. Monad applies the additional rules described below.
+
+### Hardfork schedule
+
+| Network | Chain ID | `MonadEight` | `MonadNine` |
+|---------|----------|--------------|-------------|
+| Mainnet | `143` | 2025-11-20 14:30 UTC | 2026-03-19 14:30 UTC |
+| Testnet | `10143` | 2025-11-19 14:30 UTC | 2026-03-10 14:30 UTC |
+
+Use `MonadHardfork::from_chain_and_timestamp(chain_id, timestamp)` to resolve a known network.
+Timestamps before `MonadNine` resolve to `MonadEight`; unknown chain IDs return `None`.
+`Context::monad()` deliberately defaults to `MonadNine` and does not perform schedule lookup.
 
 ## What Monad Changes
 
 ### Gas model
 
-Monad uses a different cold-access model and no gas refunds.
+Monad uses a different cold-access model and charges transactions against their full gas limit.
 
 | Access Type | Ethereum | Monad |
 |-------------|----------|-------|
 | Cold storage (`SLOAD`) | 2,100 | 8,100 |
 | Cold account (`BALANCE`, `EXTCODE*`, `CALL*`) | 2,600 | 10,100 |
 | Warm access | 100 | 100 |
+
+The caller pays `gas_limit * effective_gas_price`, unused gas is not reimbursed, and the refund
+counter is zeroed. The block beneficiary receives the priority-fee component over the full gas
+limit. Unless explicitly overridden, transactions are capped at 30 million gas.
 
 ### Repriced precompiles
 
@@ -36,6 +55,7 @@ Monad uses a different cold-access model and no gas refunds.
 | `ecPairing` | `0x08` | 45,000 + 34,000/pt | 225,000 + 170,000/pt | 5x |
 | `blake2f` | `0x09` | rounds × 1 | rounds × 2 | 2x |
 | KZG point evaluation | `0x0a` | 50,000 | 200,000 | 4x |
+| P256VERIFY | `0x0100` | N/A | 6,900 | Monad-only |
 
 ### Bytecode and transaction rules
 
@@ -45,10 +65,19 @@ Monad uses a different cold-access model and no gas refunds.
 | Initcode limit | 48KB | 256KB |
 | EIP-4844 blob tx | Supported | Rejected (`Eip4844NotSupported`) |
 | EIP-7702 system authority | Supported | Rejected for the system address |
+| EIP-7702 delegated `CREATE` / `CREATE2` | Supported | Rejected |
 
 ### MIP-3 memory model
 
-Monad replaces Ethereum's quadratic memory expansion formula with a linear `words / 2` cost and enforces an 8 MB pooled memory limit for MonadNine and later when the `memory_limit` feature is enabled. Explicit memory-limit overrides are preserved, so embedders can still configure lower or higher limits for specialized execution environments.
+Monad replaces Ethereum's quadratic memory expansion formula with a linear `words / 2` cost on
+`MonadNine` and later. With the default `memory_limit` feature, memory is pooled across the call
+stack and the effective limit is `min(configured_limit, 8 MiB)`. A lower configured limit remains
+in force; a higher configured value is retained so a transition back to `MonadEight` restores it.
+`MonadEight` uses REVM's configured limit and quadratic memory pricing.
+
+Instruction tables, available and warm precompiles, and the effective memory limit are selected
+for every frame. Nested calls that cross the `MonadEight`/`MonadNine` boundary restore the parent
+frame's behavior on success, revert, error, and immediate precompile completion.
 
 ## Staking Precompile (`0x1000`)
 
@@ -90,7 +119,7 @@ Pool rewards use an accumulator model:
 - `MIN_EXTERNAL_REWARD = 1e9`, `MAX_EXTERNAL_REWARD = 1e25`
 - `ACTIVE_VALSET_SIZE = 200`
 
-See implementation constants in `src/staking/constants.rs`.
+See implementation constants in `crates/monad-revm/src/staking/constants.rs`.
 
 ### Staking API surface in `monad-revm`
 
@@ -149,22 +178,23 @@ The staking precompile is implemented for both read methods and state-mutating u
 
 Core modules:
 
-- `src/staking/mod.rs`: top-level precompile dispatcher (`run_staking_precompile`) and read handlers.
-- `src/staking/write.rs`: all user write handlers + syscall handlers + selector/payability logic.
-- `src/staking/storage.rs`: exact storage key derivation for all staking namespaces.
-- `src/staking/types.rs`: validator/delegator/withdrawal/list node types.
-- `src/staking/interface.rs`: ABI definitions and selectors.
-- `src/staking/constants.rs`: gas-independent staking constants.
+- `crates/monad-revm/src/staking/mod.rs`: top-level precompile dispatcher and read handlers.
+- `crates/monad-revm/src/staking/write.rs`: user write handlers, syscalls, and payability logic.
+- `crates/monad-revm/src/staking/storage.rs`: storage key derivation for staking namespaces.
+- `crates/monad-revm/src/staking/types.rs`: validator, delegator, withdrawal, and list types.
+- `crates/monad-revm/src/staking/interface.rs`: ABI definitions and selectors.
+- `crates/monad-revm/src/staking/constants.rs`: gas-independent staking constants.
 
 Block lifecycle helpers:
 
-- `src/api/block.rs` exposes `apply_syscall_reward`, `apply_syscall_snapshot`, `apply_syscall_on_epoch_change`, and `apply_epoch_boundary`.
+- `crates/monad-revm/src/api/block.rs` exposes `apply_syscall_reward`, `apply_syscall_snapshot`, `apply_syscall_on_epoch_change`, and `apply_epoch_boundary`.
 - `syscallReward` supports extended calldata (`selector + blockAuthor + reward`) for `SystemCallEvm` environments that cannot attach `msg.value` to system calls.
 
 Reader integration path:
 
 - `run_staking_with_reader(...)` supports environments that do not expose full `ContextTr`, and is used by `alloy-monad-evm` integration.
-- Delegated top-level calls and internal calls into the staking precompile are rejected to match Monad precompile call restrictions.
+- Ordinary direct internal `CALL`s to the native staking address are supported. Top-level and
+  internal calls routed through an EIP-7702 delegated address are rejected.
 
 ## Reserve Balance Precompile (`0x1001`)
 
@@ -194,7 +224,8 @@ interface IReserveBalance {
 
 - Only direct `CALL` is accepted.
 - `STATICCALL`, `DELEGATECALL`, and `CALLCODE` are rejected.
-- Delegated top-level calls and internal calls into the reserve-balance precompile are rejected.
+- Ordinary direct internal `CALL`s to `0x1001` are supported. Top-level and internal calls routed
+  through an EIP-7702 delegated address are rejected.
 - Calldata must be exactly the 4-byte selector.
 - Nonzero `msg.value` is rejected.
 
@@ -204,20 +235,34 @@ Error behavior matches the canonical Monad implementation:
 - Nonzero value: `"value is nonzero"`
 - Extra calldata beyond the selector: `"input is invalid"`
 
+### Chain context and tracker lifecycle
+
+Canonical reserve-balance decisions require a populated `MonadChainContext`: the combined senders
+and authorities from the parent and grandparent blocks, current-block senders and authorization
+lists, the current transaction index, and the applicable maximum reserve balance. The default
+context is intentionally empty and is not sufficient to reproduce historical block execution.
+The default maximum reserve balance is 10 MON.
+
+The standard transaction handler initializes and clears `ReserveBalanceTracker` at transaction
+boundaries. Embedders that execute a synthetic transaction as an enclosing call must set
+`MonadJournalTr::set_preserve_reserve_balance_tracker(true)` first. If active fork or journal state
+and chain metadata are replaced, call `ReserveBalanceTracker::rebase` with the replacement state
+and `MonadChainContext`; cached thresholds from the previous state must not be reused.
+
 ## Installation
 
 Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monad-revm = { git = "https://github.com/category-labs/monad-revm", branch = "main" }
+monad-revm = "0.5.0"
 ```
 
-Or from crates.io:
+To pin directly to the matching immutable Git release:
 
 ```toml
 [dependencies]
-monad-revm = "0.4.0"
+monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.5.0" }
 ```
 
 ## Usage
@@ -225,26 +270,38 @@ monad-revm = "0.4.0"
 ### Basic example
 
 ```rust
-use monad_revm::{MonadBuilder, DefaultMonad};
+use monad_revm::{monad_context_with_db, MonadBuilder};
 use revm::{
-    context::{Context, TxEnv},
-    primitives::{TxKind, U256},
+    context::TxEnv,
+    database::InMemoryDB,
+    primitives::{Address, TxKind, U256},
+    state::AccountInfo,
     ExecuteEvm,
 };
 
-let ctx = Context::monad();
-let mut evm = ctx.build_monad();
+let caller = Address::from([0x11; 20]);
+let recipient = Address::from([0x22; 20]);
+
+let mut db = InMemoryDB::default();
+db.insert_account_info(
+    caller,
+    AccountInfo { balance: U256::from(1_000_000), ..Default::default() },
+);
+
+let context = monad_context_with_db(db);
+let mut evm = context.build_monad();
 
 let tx = TxEnv::builder()
-    .caller(caller_address)
-    .kind(TxKind::Call(contract_address))
-    .value(U256::from(1000))
-    .gas_limit(100_000)
-    .gas_price(1_000_000_000)
+    .caller(caller)
+    .kind(TxKind::Call(recipient))
+    .gas_limit(21_000)
+    .gas_price(0)
     .build_fill();
 
-let result = evm.transact(tx).expect("Transaction failed");
+let result = evm.transact(tx).expect("transaction should execute");
 ```
+
+The same program is available as [`basic.rs`](crates/monad-revm/examples/basic.rs).
 
 ### With inspector
 
@@ -259,12 +316,11 @@ let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
 ### With custom database
 
 ```rust
-use monad_revm::{MonadBuilder, DefaultMonad};
-use revm::context::Context;
+use monad_revm::{monad_context_with_db, MonadBuilder};
 
 let db = MyCustomDatabase::new();
-let ctx = Context::monad().with_db(db);
-let mut evm = ctx.build_monad();
+let context = monad_context_with_db(db);
+let mut evm = context.build_monad();
 ```
 
 ## Architecture
@@ -310,9 +366,11 @@ monad-revm/
 
 ## Feature flags
 
-- `std`: Enable standard-library support for `monad-revm`, `revm`, and `alloy-sol-types`.
+- `std`: Enable standard-library support for `monad-revm`, `revm`, and `alloy-sol-types` (default).
+  With `default-features = false`, `monad-revm` is `no_std` and uses `alloc`.
 - `serde`: Enable serialization for `MonadHardfork` and forward `serde` support to `revm`.
-- `memory_limit`: Enable the REVM memory-limit feature used by Monad's 8 MB pooled memory cap.
+- `memory_limit`: Enable pooled memory accounting and MonadNine's 8 MiB protocol cap (default).
+  MIP-3 linear pricing remains active when this feature is disabled, but the cap is not enforced.
 - `optional_balance_check`, `optional_block_gas_limit`, `optional_no_base_fee`: Forward the matching optional execution controls to `revm`.
 - `c-kzg`, `secp256k1`, `portable`, `blst`: Forward the matching cryptography/portability features to `revm`.
 - `dev`: Enable development-oriented optional execution controls used by tests and local integrations.
@@ -320,7 +378,7 @@ monad-revm/
 ## Integration layers
 
 - [`alloy-monad-evm`](https://github.com/category-labs/alloy-monad-evm): Alloy `Evm` / `EvmFactory` wrapper over `monad-revm`.
-- [`monad-foundry`](https://github.com/category-labs/foundry/tree/monad): Foundry integration (Forge/Anvil/Cast/Chisel).
+- [Foundry Monad integration](https://github.com/foundry-rs/foundry/pull/15343): Forge, Anvil, Cast, and Chisel support.
 
 ## Release coordination
 
@@ -330,10 +388,10 @@ monad-revm/
 
 - [Monad opcode pricing](https://docs.monad.xyz/developer-essentials/opcode-pricing)
 - [Monad precompiles](https://docs.monad.xyz/developer-essentials/precompiles)
-- [Monad staking precompile docs](https://docs.monad.xyz/developer-essentials/staking/staking-precompile)
+- [Monad staking API](https://docs.monad.xyz/reference/staking/api)
 
 ## License
 
-Revm is licensed under MIT License.
+`monad-revm` is licensed under the MIT License.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in these crates by you, shall be licensed as above, without any additional terms or conditions.

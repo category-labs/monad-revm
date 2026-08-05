@@ -5,6 +5,8 @@
 //! - Custom precompiles (including staking at 0x1000)
 //! - Custom gas costs
 //! - Custom code size limits (128KB max code, 256KB max initcode)
+//! - Per-frame Monad hardfork instruction and precompile selection
+//! - Staking and reserve-balance protocol precompiles
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -38,7 +40,10 @@ pub mod spec;
 pub mod staking;
 
 pub use api::*;
-pub use cfg::{MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE};
+pub use cfg::{
+    MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE, MONAD_MEMORY_LIMIT,
+    MONAD_TX_GAS_LIMIT_CAP,
+};
 pub use chain::MonadChainContext;
 pub use evm::MonadEvm;
 pub use journal::{MonadJournal, MonadJournalTr};

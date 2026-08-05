@@ -10,20 +10,24 @@ use revm::{
 
 /// Type alias for the default Monad context.
 ///
-/// Uses standard Ethereum types since Monad doesn't need custom tx/block types.
-/// The key difference is:
-/// - Using `MonadHardfork` instead of `SpecId`
-/// - Using `MonadCfgEnv` which has Monad-specific defaults (128KB code size limit)
+/// Uses [`MonadCfgEnv`] for the Monad hardfork and gas rules, [`MonadJournal`] for
+/// reserve-balance tracking, and [`MonadChainContext`] for chain-dependent reserve decisions.
 pub type MonadContext<DB> =
     Context<BlockEnv, TxEnv, MonadCfgEnv, DB, MonadJournal<DB>, MonadChainContext>;
 
 /// Trait for creating a default Monad context.
 pub trait DefaultMonad {
-    /// Creates a new Monad context with default settings and an empty database.
+    /// Creates a MonadNine context with default settings and an empty database.
+    ///
+    /// This does not resolve the active hardfork from a chain ID and timestamp. Historical
+    /// execution should select a spec explicitly and populate [`MonadChainContext`].
     fn monad() -> MonadContext<EmptyDB>;
 }
 
-/// Creates a Monad context with the given database backend.
+/// Creates a MonadNine context with the given database backend.
+///
+/// The context applies Monad gas parameters, a 30 million transaction gas cap, and a default
+/// 10 MON reserve threshold. Its chain metadata is empty; canonical replay must populate it.
 pub fn monad_context_with_db<DB: Database>(db: DB) -> MonadContext<DB> {
     let mut journaled_state = MonadJournal::new(db);
     journaled_state.set_spec_id(MonadHardfork::default().into());
