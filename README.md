@@ -15,9 +15,6 @@
 | **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine` and `MonadNext` |
 | **Default Monad spec** | `MonadNine` |
 
-The Ethereum spec is a foundation for instruction and precompile selection, not a claim of
-protocol equivalence. Monad applies the additional rules described below.
-
 ### Hardfork schedule
 
 | Network | Chain ID | `MonadEight` | `MonadNine` |
@@ -403,6 +400,6 @@ monad-revm/
 
 ## License
 
-`monad-revm` is licensed under the MIT License.
+`monad-revm` is licensed under the GNU General Public License v3.0.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in these crates by you, shall be licensed as above, without any additional terms or conditions.
