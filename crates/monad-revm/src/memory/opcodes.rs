@@ -5,6 +5,7 @@
 //! need to run across specs, such as CALL-like opcodes.
 
 use super::resize_memory_mip3;
+use alloc::boxed::Box;
 use core::cmp::{max, min};
 use revm::interpreter::{
     instructions::contract::get_memory_input_and_out_ranges,
@@ -22,7 +23,6 @@ use revm::{
     primitives::{self, hardfork::SpecId, Address, Bytes, B256, KECCAK_EMPTY, U256},
     state::Bytecode,
 };
-use std::boxed::Box;
 
 // Re-export internal macros / traits needed by revm_interpreter macros.
 use revm_interpreter::instructions::utility::IntoAddress;

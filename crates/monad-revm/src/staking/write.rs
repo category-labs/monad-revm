@@ -20,6 +20,12 @@ use super::{
     types::{validator_flags, Delegator, ListNode, RefCountedAccumulator, Validator},
     StorageReader,
 };
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use alloy_sol_types::{SolCall, SolEvent};
 use revm::{
     interpreter::{Gas, InstructionResult, InterpreterResult},

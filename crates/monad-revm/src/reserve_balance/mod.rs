@@ -7,6 +7,7 @@ pub mod tracker;
 
 use crate::{api::exec::MonadContextTr, journal::MonadJournalTr, MonadHardfork};
 use abi::{DIPPED_INTO_RESERVE_GAS, DIPPED_INTO_RESERVE_SELECTOR, RESERVE_BALANCE_ADDRESS};
+use alloc::string::{String, ToString};
 use error::ReserveBalanceError;
 use revm::{
     context::Cfg,
@@ -106,6 +107,7 @@ mod tests {
         },
         MonadCfgEnv, MonadHardfork,
     };
+    use alloc::vec;
     use alloy_sol_types::SolCall;
     use revm::{
         bytecode::Bytecode,

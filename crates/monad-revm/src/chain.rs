@@ -1,5 +1,6 @@
 //! Monad-specific chain context.
 
+use alloc::vec::Vec;
 use revm::primitives::{Address, HashSet, U256};
 
 /// Default max reserve balance: 10 MON.

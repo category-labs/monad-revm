@@ -4,6 +4,7 @@
 //! - Gas is charged based on gas_limit, not gas_used (no refunds)
 //! - Blob transactions (EIP-4844) are not supported
 //! - No header validation for prevrandao or excess_blob_gas (Monad doesn't use these)
+use alloc::boxed::Box;
 use revm::{
     context_interface::{
         journaled_state::account::JournaledAccountTr,
@@ -311,6 +312,7 @@ mod tests {
         reserve_balance::abi::{DIPPED_INTO_RESERVE_SELECTOR, RESERVE_BALANCE_ADDRESS},
         MonadHardfork,
     };
+    use alloc::vec;
     use revm::{
         context::{result::EVMError, Context, TxEnv},
         context_interface::{
