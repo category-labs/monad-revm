@@ -11,7 +11,9 @@ use revm::context_interface::cfg::GasParams;
 /// Monad transaction gas limit cap (30M gas).
 pub const MONAD_TX_GAS_LIMIT_CAP: u64 = 30_000_000;
 
-/// MIP-3: Maximum memory per transaction (8 MiB), pooled across the call stack.
+/// MIP-3 maximum memory per transaction (8 MiB), pooled across the call stack.
+///
+/// This limit is enforced for MonadNine and later when the `memory_limit` feature is enabled.
 pub const MONAD_MEMORY_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// Monad maximum contract code size.
@@ -31,7 +33,8 @@ pub const MONAD_MAX_INITCODE_SIZE: usize = MONAD_MAX_CODE_SIZE * 2; // 256KB
 /// the `Cfg` trait with Monad-specific defaults for:
 /// - `max_code_size()`: Returns [`MONAD_MAX_CODE_SIZE`] (128KB) instead of EIP-170's 24KB
 /// - `max_initcode_size()`: Returns [`MONAD_MAX_INITCODE_SIZE`] (256KB) instead of EIP-3860's 48KB
-/// - `memory_limit()`: Clamps MonadNine+ execution to [`MONAD_MEMORY_LIMIT`] (8 MiB)
+/// - `memory_limit()`: With the `memory_limit` feature, clamps MonadNine+ execution to
+///   [`MONAD_MEMORY_LIMIT`] (8 MiB)
 ///
 /// All other configuration options are delegated to the inner `CfgEnv`.
 #[derive(Clone, Debug, Eq, PartialEq)]

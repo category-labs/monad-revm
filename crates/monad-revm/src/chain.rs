@@ -9,6 +9,8 @@ pub const fn default_max_reserve_balance() -> U256 {
 }
 
 /// Monad chain context needed for reserve-balance decisions.
+///
+/// The default value contains no historical block metadata and is not a canonical replay context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MonadChainContext {
     /// Combined senders and authorities from the parent block.
