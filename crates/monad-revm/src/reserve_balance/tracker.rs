@@ -34,6 +34,7 @@ pub struct ReserveBalanceTracker {
     use_recent_code_hash: bool,
     sender: Address,
     sender_gas_fees: U256,
+    sender_is_delegated: bool,
     sender_can_dip: bool,
     allow_init_selfdestruct_exemption: bool,
     violation_thresholds: HashMap<Address, Option<U256>>,
@@ -63,10 +64,31 @@ impl ReserveBalanceTracker {
         self.chain = init.chain.clone();
         self.use_recent_code_hash = MonadHardfork::MonadEight.is_enabled_in(init.spec);
         self.sender = init.sender;
+        self.sender_is_delegated = init.sender_is_delegated;
         self.allow_init_selfdestruct_exemption = MonadHardfork::MonadNine.is_enabled_in(init.spec);
         self.sender_gas_fees = U256::from(init.effective_gas_price) * U256::from(init.gas_limit);
         self.sender_can_dip = init.chain.sender_can_dip(self.sender, init.sender_is_delegated);
         self.update_loaded_account(init.sender_account, self.sender);
+    }
+
+    /// Rebases tracked accounts onto replacement journal state and chain metadata.
+    ///
+    /// This preserves the enclosing transaction's sender and gas invariants while discarding
+    /// cached thresholds derived from the previous state. Accounts that were merely loaded but
+    /// never affected by reserve tracking remain untracked.
+    pub fn rebase(&mut self, chain: &MonadChainContext, state: &revm::state::EvmState) {
+        if !self.tracking_enabled {
+            return;
+        }
+
+        let tracked = core::mem::take(&mut self.violation_thresholds);
+        self.chain = chain.clone();
+        self.sender_can_dip = chain.sender_can_dip(self.sender, self.sender_is_delegated);
+        self.failed.clear();
+
+        for address in tracked.into_keys() {
+            self.update_loaded_account(state.get(&address), address);
+        }
     }
 
     /// Recomputes the violation status of an address after a debit.
@@ -197,4 +219,185 @@ impl ReserveBalanceTracker {
 
 fn is_smart_contract_code(code: &Bytecode) -> bool {
     !code.original_bytes().is_empty() && !code.is_eip7702()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use revm::state::{AccountInfo, EvmState};
+
+    fn debited_account(original: u64, current: u64) -> Account {
+        let mut account =
+            Account::from(AccountInfo { balance: U256::from(original), ..Default::default() });
+        account.info.balance = U256::from(current);
+        account
+    }
+
+    fn sender_chain(sender: Address) -> MonadChainContext {
+        MonadChainContext {
+            parent_senders_and_authorities: [sender].into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn init_tracker(
+        tracker: &mut ReserveBalanceTracker,
+        chain: &MonadChainContext,
+        sender: Address,
+        account: &Account,
+        delegated: bool,
+    ) {
+        init_tracker_with_fees(tracker, chain, sender, account, delegated, 0, 0);
+    }
+
+    fn init_tracker_with_fees(
+        tracker: &mut ReserveBalanceTracker,
+        chain: &MonadChainContext,
+        sender: Address,
+        account: &Account,
+        delegated: bool,
+        effective_gas_price: u128,
+        gas_limit: u64,
+    ) {
+        tracker.init(ReserveBalanceInit {
+            chain,
+            spec: MonadHardfork::MonadNine,
+            sender,
+            effective_gas_price,
+            gas_limit,
+            sender_is_delegated: delegated,
+            sender_account: Some(account),
+        });
+    }
+
+    #[test]
+    fn rebase_updates_sender_eligibility_in_both_directions() {
+        let sender = Address::with_last_byte(1);
+        let account = debited_account(12, 9);
+        let fresh_chain = MonadChainContext::default();
+        let restricted_chain = sender_chain(sender);
+        let state = EvmState::from_iter([(sender, account.clone())]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &fresh_chain, sender, &account, false);
+        assert!(!tracker.has_violation());
+
+        tracker.rebase(&restricted_chain, &state);
+        assert!(tracker.has_violation());
+
+        tracker.rebase(&fresh_chain, &state);
+        assert!(!tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_preserves_delegated_sender_restriction() {
+        let sender = Address::with_last_byte(1);
+        let account = debited_account(12, 9);
+        let fresh_chain = MonadChainContext::default();
+        let state = EvmState::from_iter([(sender, account.clone())]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &fresh_chain, sender, &account, true);
+        assert!(tracker.has_violation());
+
+        tracker.rebase(&fresh_chain, &state);
+        assert!(tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_preserves_sender_gas_fee_allowance() {
+        let sender = Address::with_last_byte(1);
+        let account = debited_account(12, 11);
+        let chain = sender_chain(sender);
+        let state = EvmState::from_iter([(sender, account.clone())]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker_with_fees(&mut tracker, &chain, sender, &account, false, 1, 2);
+        assert!(!tracker.has_violation());
+
+        tracker.rebase(&chain, &state);
+        assert!(!tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_drops_accounts_absent_from_replacement_state() {
+        let sender = Address::with_last_byte(1);
+        let tracked = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let tracked_account = debited_account(12, 9);
+        let chain = sender_chain(sender);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &chain, sender, &sender_account, false);
+        tracker.on_debit(Some(&tracked_account), tracked);
+        assert!(tracker.has_violation());
+
+        let state = EvmState::from_iter([(sender, sender_account)]);
+        tracker.rebase(&chain, &state);
+        assert!(!tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_preserves_tracked_violation_in_replacement_state() {
+        let sender = Address::with_last_byte(1);
+        let tracked = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let tracked_account = debited_account(12, 9);
+        let chain = sender_chain(sender);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &chain, sender, &sender_account, false);
+        tracker.on_debit(Some(&tracked_account), tracked);
+        assert!(tracker.has_violation());
+
+        let state = EvmState::from_iter([(sender, sender_account), (tracked, tracked_account)]);
+        tracker.rebase(&chain, &state);
+        assert!(tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_recomputes_thresholds_from_replacement_original_state() {
+        let sender = Address::with_last_byte(1);
+        let tracked = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let tracked_account = debited_account(12, 9);
+        let replacement_account = debited_account(8, 8);
+        let chain = sender_chain(sender);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &chain, sender, &sender_account, false);
+        tracker.on_debit(Some(&tracked_account), tracked);
+        assert!(tracker.has_violation());
+
+        let state = EvmState::from_iter([(sender, sender_account), (tracked, replacement_account)]);
+        tracker.rebase(&chain, &state);
+        assert!(!tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_does_not_track_unaffected_loaded_accounts() {
+        let sender = Address::with_last_byte(1);
+        let unrelated = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let unrelated_account = debited_account(12, 9);
+        let chain = MonadChainContext::default();
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker(&mut tracker, &chain, sender, &sender_account, false);
+        let state =
+            EvmState::from_iter([(sender, sender_account), (unrelated, unrelated_account.clone())]);
+        tracker.rebase(&chain, &state);
+        assert!(!tracker.has_violation());
+
+        tracker.on_debit(Some(&unrelated_account), unrelated);
+        assert!(tracker.has_violation());
+    }
+
+    #[test]
+    fn rebase_is_a_noop_when_tracking_is_disabled() {
+        let mut tracker = ReserveBalanceTracker::default();
+        let chain = sender_chain(Address::with_last_byte(1));
+        tracker.rebase(&chain, &EvmState::default());
+        assert_eq!(tracker, ReserveBalanceTracker::default());
+    }
 }
