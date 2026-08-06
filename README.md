@@ -253,7 +253,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monad-revm = "0.5.0"
+monad-revm = "0.5.1"
 revm = "41.0.0"
 ```
 
@@ -261,7 +261,7 @@ To pin directly to the matching immutable Git release:
 
 ```toml
 [dependencies]
-monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.5.0" }
+monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.5.1" }
 revm = "41.0.0"
 ```
 
@@ -302,7 +302,7 @@ let result = evm.transact(tx).expect("transaction should execute");
 ```
 
 The same program is available as
-[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.5.0/crates/monad-revm/examples/basic.rs).
+[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.5.1/crates/monad-revm/examples/basic.rs).
 
 ### With inspector
 
