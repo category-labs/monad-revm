@@ -400,6 +400,6 @@ monad-revm/
 
 ## License
 
-`monad-revm` is licensed under the GNU General Public License v3.0.
+`monad-revm` is licensed under the MIT License.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in these crates by you, shall be licensed as above, without any additional terms or conditions.
