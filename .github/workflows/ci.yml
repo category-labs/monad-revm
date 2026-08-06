@@ -27,6 +27,27 @@ jobs:
       - name: Check no_std library
         run: cargo check --workspace --no-default-features --lib
 
+  no-std:
+    name: no_std (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - features: no features
+            args: ''
+          - features: memory_limit
+            args: '--features memory_limit'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+        with:
+          targets: thumbv7em-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - run: >-
+          cargo check --workspace --lib --no-default-features
+          --target thumbv7em-none-eabi ${{ matrix.args }}
+
   build:
     name: cargo build
     runs-on: ubuntu-latest
