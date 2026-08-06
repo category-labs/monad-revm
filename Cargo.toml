@@ -3,11 +3,11 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.91"
 authors = ["Haythem Sellami - Category Labs <hsellami@category.xyz>"]
-license = "GPL-3.0-only"
+license = "MIT"
 repository = "https://github.com/category-labs/monad-revm"
 documentation = "https://docs.rs/monad-revm"
 categories = ["cryptography::cryptocurrencies"]
@@ -26,7 +26,7 @@ use-self = "warn"
 redundant-clone = "warn"
 
 [workspace.dependencies]
-monad-revm = { version = "0.5.0", path = "crates/monad-revm", default-features = false }
+monad-revm = { version = "0.5.1", path = "crates/monad-revm", default-features = false }
 
 # revm
 revm = { version = "41.0.0", default-features = false }

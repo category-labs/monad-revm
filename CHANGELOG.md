@@ -2,6 +2,20 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
+## [0.5.1] - 2026-08-06
+
+### Changed
+
+- Restored the MIT license used through `0.4.0`. The `0.5.0` crates.io release remains available
+  under GPL-3.0-only according to its published package metadata.
+
+### Fixed
+
+- Made staking validator-set bit operations portable to 32-bit targets by using a
+  target-sized, bounded shift count.
+- Added bare-metal CI coverage for the default `no_std` library configuration and the
+  `memory_limit` feature.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added
@@ -22,4 +36,5 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Restored the parent frame's Monad behavior after nested calls and immediate precompile results.
 - Reverted preserved reserve-balance tracker mutations when synthetic execution fails.
 
+[0.5.1]: https://github.com/category-labs/monad-revm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/category-labs/monad-revm/compare/v0.4.0...v0.5.0
