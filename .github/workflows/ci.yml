@@ -41,8 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
-        with:
-          targets: thumbv7em-none-eabi
+      - name: Install bare-metal target
+        run: rustup target add thumbv7em-none-eabi
       - uses: Swatinem/rust-cache@v2
       - run: >-
           cargo check --workspace --lib --no-default-features
