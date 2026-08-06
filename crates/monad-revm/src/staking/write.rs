@@ -760,7 +760,7 @@ fn linked_list_remove_val_id<S: StakingStorage>(
 fn add_to_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<bool, PrecompileHalt> {
     let bucket_key = bitset_bucket_key(val_id);
     let set = read_u256(s, bucket_key)?;
-    let bit = val_id & 0xFF;
+    let bit = (val_id & 0xFF) as usize;
     let mask = U256::from(1u64) << bit;
     let inserted = (set & mask).is_zero();
     let new_set = set | mask;
@@ -779,7 +779,7 @@ fn add_to_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<bool, Prec
 fn remove_from_valset<S: StakingStorage>(s: &mut S, val_id: u64) -> Result<(), PrecompileHalt> {
     let bucket_key = bitset_bucket_key(val_id);
     let set = read_u256(s, bucket_key)?;
-    let bit = val_id & 0xFF;
+    let bit = (val_id & 0xFF) as usize;
     let mask = !(U256::from(1u64) << bit);
     let new_set = set & mask;
     write_storage_u256(s, bucket_key, new_set)
@@ -1973,6 +1973,43 @@ mod tests {
         bytes[..20].copy_from_slice(auth.as_slice());
         bytes[20..28].copy_from_slice(&flags.to_be_bytes());
         U256::from_be_bytes(bytes)
+    }
+
+    #[test]
+    fn valset_bitset_handles_bucket_boundaries() {
+        let mut storage = MockStorage::default();
+
+        for val_id in [0, 255, 256] {
+            assert!(add_to_valset(&mut storage, val_id).expect("validator should be inserted"));
+            assert!(!add_to_valset(&mut storage, val_id).expect("duplicate should be ignored"));
+        }
+
+        assert_eq!(
+            storage.slots.get(&bitset_bucket_key(0)).copied().unwrap_or_default(),
+            U256::from(1) | (U256::from(1) << 255usize)
+        );
+        assert_eq!(
+            storage.slots.get(&bitset_bucket_key(256)).copied().unwrap_or_default(),
+            U256::from(1)
+        );
+        assert_eq!(storage.get_u64_left(valset_slots::EXECUTION), 3);
+
+        remove_from_valset(&mut storage, 255).expect("validator should be removed");
+        assert_eq!(
+            storage.slots.get(&bitset_bucket_key(0)).copied().unwrap_or_default(),
+            U256::from(1)
+        );
+
+        remove_from_valset(&mut storage, 0).expect("validator should be removed");
+        remove_from_valset(&mut storage, 256).expect("validator should be removed");
+        assert_eq!(
+            storage.slots.get(&bitset_bucket_key(0)).copied().unwrap_or_default(),
+            U256::ZERO
+        );
+        assert_eq!(
+            storage.slots.get(&bitset_bucket_key(256)).copied().unwrap_or_default(),
+            U256::ZERO
+        );
     }
 
     #[test]
