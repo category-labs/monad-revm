@@ -737,7 +737,8 @@ mod tests {
         authority: Address,
         delegated_address: Address,
     ) -> RecoveredAuthorization {
-        make_recovered_auth_to_with_nonce(authority, delegated_address, 0)
+        let authority_nonce = AccountInfo::default().nonce;
+        make_recovered_auth_to_with_nonce(authority, delegated_address, authority_nonce)
     }
 
     fn make_recovered_auth_to_with_nonce(
@@ -833,11 +834,12 @@ mod tests {
         let sender = Address::from([0x11; 20]);
         let target = Address::from([0x22; 20]);
         let delegated_address = Address::from([0x33; 20]);
+        let sender_account = AccountInfo { balance: U256::from(12), ..Default::default() };
+        let tx_nonce = sender_account.nonce;
+        let authorization_nonce =
+            tx_nonce.checked_add(1).expect("sender nonce should have a successor");
         let mut db = InMemoryDB::default();
-        db.insert_account_info(
-            sender,
-            AccountInfo { balance: U256::from(12), ..Default::default() },
-        );
+        db.insert_account_info(sender, sender_account);
         db.insert_account_info(
             target,
             AccountInfo::default().with_code(reserve_balance_query_code()),
@@ -852,13 +854,14 @@ mod tests {
             .caller(sender)
             .to(target)
             .value(U256::from(3))
+            .nonce(tx_nonce)
             .gas_limit(100_000)
             .gas_price(0)
             .gas_priority_fee(Some(0))
             .authorization_list(vec![Either::Right(make_recovered_auth_to_with_nonce(
                 sender,
                 delegated_address,
-                1,
+                authorization_nonce,
             ))])
             .build_fill();
 
