@@ -10,7 +10,7 @@
 
 | Component | Version |
 |-----------|---------|
-| **revm** | v41.0.0 |
+| **revm** | v42.0.1 |
 | **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadNext` |
 | **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine` and `MonadNext` |
 | **Default Monad spec** | `MonadNine` |
@@ -253,16 +253,16 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monad-revm = "0.5.1"
-revm = "41.0.0"
+monad-revm = "0.6.0"
+revm = "42.0.1"
 ```
 
 To pin directly to the matching immutable Git release:
 
 ```toml
 [dependencies]
-monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.5.1" }
-revm = "41.0.0"
+monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.6.0" }
+revm = "42.0.1"
 ```
 
 ## Usage
@@ -302,7 +302,7 @@ let result = evm.transact(tx).expect("transaction should execute");
 ```
 
 The same program is available as
-[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.5.1/crates/monad-revm/examples/basic.rs).
+[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.6.0/crates/monad-revm/examples/basic.rs).
 
 ### With inspector
 
