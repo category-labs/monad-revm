@@ -4,13 +4,12 @@
 //! - Gas is charged based on gas_limit, not gas_used (no refunds)
 //! - Blob transactions (EIP-4844) are not supported
 //! - No header validation for prevrandao or excess_blob_gas (Monad doesn't use these)
-use alloc::boxed::Box;
 use revm::{
     context_interface::{
         journaled_state::account::JournaledAccountTr,
         result::{HaltReason, InvalidTransaction},
         transaction::{AuthorizationTr, TransactionType},
-        Block, Cfg, ContextTr, Database, JournalTr, LocalContextTr, Transaction,
+        Block, Cfg, ContextTr, Database, JournalTr, Transaction,
     },
     handler::{
         evm::FrameTr, handler::EvmTrError, pre_execution, validation, EthFrame, EvmTr, FrameResult,
@@ -18,10 +17,10 @@ use revm::{
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{
-        interpreter::EthInterpreter, interpreter_action::FrameInit, CallInput, CallInputs,
-        CallScheme, CallValue, CreateInputs, FrameInput, InitialAndFloorGas, SharedMemory,
+        interpreter::EthInterpreter, interpreter_action::FrameInit, FrameInput, GasTracker,
+        InitialAndFloorGas,
     },
-    primitives::{hardfork::SpecId, TxKind, U256},
+    primitives::{hardfork::SpecId, U256},
     state::Bytecode,
 };
 
@@ -144,45 +143,12 @@ where
         validation::validate_tx_env(evm.ctx(), spec).map_err(Into::into)
     }
 
-    fn pre_execution(
+    fn validate_against_state_and_deduct_caller(
         &self,
         evm: &mut Self::Evm,
-        init_and_floor_gas: &mut InitialAndFloorGas,
-    ) -> Result<u64, Self::Error> {
-        validate_monad_against_state_and_deduct_caller::<_, Self::Error>(evm.ctx())?;
-        self.load_accounts(evm)?;
-        let gas = self.apply_eip7702_auth_list(evm, init_and_floor_gas)?;
-
-        if !evm.ctx().journal().preserves_reserve_balance_tracker() {
-            let sender = evm.ctx().tx().caller();
-            let basefee = evm.ctx().block().basefee() as u128;
-            let effective_gas_price = evm.ctx().tx().effective_gas_price(basefee);
-            let gas_limit = evm.ctx().tx().gas_limit();
-            let spec = evm.ctx().cfg().spec();
-            let chain = evm.ctx().chain().clone();
-            let (sender_is_delegated, sender_account) = {
-                let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
-                (
-                    sender_account
-                        .info
-                        .code
-                        .as_ref()
-                        .is_some_and(revm::bytecode::Bytecode::is_eip7702),
-                    sender_account.clone(),
-                )
-            };
-
-            evm.ctx().journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
-                chain: &chain,
-                spec,
-                sender,
-                effective_gas_price,
-                gas_limit,
-                sender_is_delegated,
-                sender_account: Some(&sender_account),
-            });
-        }
-        Ok(gas)
+        _init_and_floor_gas: &mut InitialAndFloorGas,
+    ) -> Result<(), Self::Error> {
+        validate_monad_against_state_and_deduct_caller::<_, Self::Error>(evm.ctx())
     }
 
     // Disable gas refunds
@@ -191,8 +157,9 @@ where
         _evm: &mut Self::Evm,
         exec_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
         _eip7702_refund: i64,
-    ) {
+    ) -> Result<(), Self::Error> {
         exec_result.gas_mut().set_refund(0);
+        Ok(())
     }
 
     // Don't reimburse caller
@@ -235,59 +202,53 @@ where
     fn first_frame_input(
         &mut self,
         evm: &mut Self::Evm,
-        gas_limit: u64,
-        reservoir: u64,
-    ) -> Result<FrameInit, Self::Error> {
-        let ctx = evm.ctx_mut();
-        let mut memory = SharedMemory::new_with_buffer(ctx.local().shared_memory_buffer().clone());
-        memory.set_memory_limit(ctx.cfg().memory_limit());
-
-        let (tx, journal) = ctx.tx_journal_mut();
-        let input = tx.input().clone();
-        let frame_input = match tx.kind() {
-            TxKind::Call(target_address) => {
-                let account = &journal.load_account_with_code(target_address)?.info;
-                let (known_bytecode, bytecode_address) = if let Some(delegated_address) =
-                    account.code.as_ref().and_then(Bytecode::eip7702_address)
-                {
-                    let account = &journal.load_account_with_code(delegated_address)?.info;
-                    (
-                        (account.code_hash(), account.code.clone().unwrap_or_default()),
-                        delegated_address,
-                    )
-                } else {
-                    (
-                        (account.code_hash(), account.code.clone().unwrap_or_default()),
-                        target_address,
-                    )
-                };
-
-                FrameInput::Call(Box::new(CallInputs {
-                    input: CallInput::Bytes(input),
-                    gas_limit,
-                    reservoir,
-                    bytecode_address,
-                    target_address,
-                    known_bytecode,
-                    caller: tx.caller(),
-                    value: CallValue::Transfer(tx.value()),
-                    scheme: CallScheme::Call,
-                    is_static: false,
-                    return_memory_offset: 0..0,
-                    charged_new_account_state_gas: false,
-                }))
-            }
-            TxKind::Create => FrameInput::Create(Box::new(CreateInputs::new(
-                tx.caller(),
-                revm::context_interface::CreateScheme::Create,
-                tx.value(),
-                input,
-                gas_limit,
-                reservoir,
-            ))),
+        gas: &mut GasTracker,
+    ) -> Result<Option<FrameInit>, Self::Error> {
+        let Some(mut frame) = self.mainnet.first_frame_input(evm, gas)? else {
+            return Ok(None);
         };
 
-        Ok(FrameInit { depth: 0, memory, frame_input })
+        if let FrameInput::Call(inputs) = &mut frame.frame_input {
+            let account =
+                &evm.ctx().journal_mut().load_account_with_code(inputs.target_address)?.info;
+            if let Some(delegated_address) =
+                account.code.as_ref().and_then(Bytecode::eip7702_address)
+            {
+                inputs.bytecode_address = delegated_address;
+            }
+        }
+
+        if !evm.ctx().journal().preserves_reserve_balance_tracker() {
+            let sender = evm.ctx().tx().caller();
+            let basefee = evm.ctx().block().basefee() as u128;
+            let effective_gas_price = evm.ctx().tx().effective_gas_price(basefee);
+            let gas_limit = evm.ctx().tx().gas_limit();
+            let spec = evm.ctx().cfg().spec();
+            let chain = evm.ctx().chain().clone();
+            let (sender_is_delegated, sender_account) = {
+                let sender_account = evm.ctx().journal_mut().load_account_with_code(sender)?.data;
+                (
+                    sender_account
+                        .info
+                        .code
+                        .as_ref()
+                        .is_some_and(revm::bytecode::Bytecode::is_eip7702),
+                    sender_account.clone(),
+                )
+            };
+
+            evm.ctx().journal_mut().reserve_balance_mut().init(ReserveBalanceInit {
+                chain: &chain,
+                spec,
+                sender,
+                effective_gas_price,
+                gas_limit,
+                sender_is_delegated,
+                sender_account: Some(&sender_account),
+            });
+        }
+
+        Ok(Some(frame))
     }
 }
 
@@ -310,20 +271,53 @@ mod tests {
         api::builder::MonadBuilder,
         api::default_ctx::{monad_context_with_db, DefaultMonad},
         reserve_balance::abi::{DIPPED_INTO_RESERVE_SELECTOR, RESERVE_BALANCE_ADDRESS},
-        MonadHardfork,
+        staking::{interface::IMonadStaking::getEpochCall, STAKING_ADDRESS},
+        MonadCfgEnv, MonadHardfork,
     };
     use alloc::vec;
+    use alloy_sol_types::SolCall;
     use revm::{
+        bytecode::{opcode, Bytecode},
         context::{result::EVMError, Context, TxEnv},
         context_interface::{
             either::Either,
+            result::{ExecutionResult, ResultAndState},
             transaction::{Authorization, RecoveredAuthority, RecoveredAuthorization},
         },
         database::InMemoryDB,
         inspector::NoOpInspector,
         primitives::{Address, Bytes, TxKind, B256},
+        state::AccountInfo,
         ExecuteEvm,
     };
+
+    fn reserve_balance_query_code() -> Bytecode {
+        let mut code = vec![opcode::PUSH4];
+        code.extend_from_slice(&DIPPED_INTO_RESERVE_SELECTOR);
+        code.extend_from_slice(&[
+            opcode::PUSH0,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::PUSH1,
+            0x04,
+            opcode::PUSH1,
+            0x1c,
+            opcode::PUSH0,
+            opcode::PUSH2,
+            0x10,
+            0x01,
+            opcode::GAS,
+            opcode::CALL,
+            opcode::POP,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::RETURN,
+        ]);
+        Bytecode::new_raw(Bytes::from(code))
+    }
 
     #[test]
     fn synthetic_transaction_preserves_reserve_balance_tracker() {
@@ -372,6 +366,40 @@ mod tests {
         let output = result.result.output().expect("precompile should return output");
         assert_eq!(output[31], 1);
         assert!(evm.ctx().journal().reserve_balance().has_violation());
+    }
+
+    #[test]
+    fn reserve_tracker_observes_initial_value_transfer() {
+        let sender = Address::from([0x11; 20]);
+        let target = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(12), ..Default::default() },
+        );
+        db.insert_account_info(
+            target,
+            AccountInfo::default().with_code(reserve_balance_query_code()),
+        );
+
+        let mut ctx = monad_context_with_db(db);
+        ctx.chain.parent_senders_and_authorities.insert(sender);
+        ctx.chain.max_reserve_balance = U256::from(10);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(sender)
+            .to(target)
+            .value(U256::from(3))
+            .gas_limit(100_000)
+            .gas_price(0)
+            .build_fill();
+
+        let result = evm.transact(tx).expect("transaction should succeed");
+        let output = result.result.output().expect("contract should return reserve status");
+        assert_eq!(output[31], 1, "initial value transfer must be tracked before execution");
     }
 
     #[test]
@@ -498,6 +526,44 @@ mod tests {
             result.result.tx_gas_used(),
             gas_limit
         );
+    }
+
+    #[test]
+    fn test_fee_and_nonce_are_applied_exactly_once() {
+        let caller = Address::from([1u8; 20]);
+        let recipient = Address::from([2u8; 20]);
+        let initial_nonce = 7;
+        let gas_limit = 100_000u64;
+        let gas_price = 17u128;
+        let value = U256::from(123);
+        let initial_balance = U256::from(10_000_000u64);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: initial_balance, nonce: initial_nonce, ..Default::default() },
+        );
+
+        let ctx = monad_context_with_db(db);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .to(recipient)
+            .value(value)
+            .nonce(initial_nonce)
+            .gas_limit(gas_limit)
+            .gas_price(gas_price)
+            .build_fill();
+
+        let result = evm.transact(tx).expect("transaction should succeed");
+        let caller_account = result.state.get(&caller).expect("caller should be in output state");
+        let expected_balance =
+            initial_balance - U256::from(gas_limit) * U256::from(gas_price) - value;
+
+        assert_eq!(caller_account.info.nonce, initial_nonce + 1);
+        assert_eq!(caller_account.info.balance, expected_balance);
     }
 
     #[test]
@@ -664,10 +730,146 @@ mod tests {
 
     /// Helper to create a RecoveredAuthorization with a specific authority address.
     fn make_recovered_auth(authority: Address) -> RecoveredAuthorization {
+        make_recovered_auth_to(authority, Address::from([0xAA; 20]))
+    }
+
+    fn make_recovered_auth_to(
+        authority: Address,
+        delegated_address: Address,
+    ) -> RecoveredAuthorization {
+        make_recovered_auth_to_with_nonce(authority, delegated_address, 0)
+    }
+
+    fn make_recovered_auth_to_with_nonce(
+        authority: Address,
+        delegated_address: Address,
+        nonce: u64,
+    ) -> RecoveredAuthorization {
         RecoveredAuthorization::new_unchecked(
-            Authorization { chain_id: U256::from(1), address: Address::from([0xAA; 20]), nonce: 0 },
+            Authorization { chain_id: U256::from(1), address: delegated_address, nonce },
             RecoveredAuthority::Valid(authority),
         )
+    }
+
+    fn run_same_transaction_delegated_call(
+        spec: MonadHardfork,
+        delegated_address: Address,
+        input: Bytes,
+    ) -> ResultAndState<HaltReason> {
+        let caller = Address::from([0x11; 20]);
+        let authority = Address::from([0x22; 20]);
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(caller, AccountInfo { balance: U256::MAX, ..Default::default() });
+
+        let mut ctx = monad_context_with_db(db);
+        ctx.cfg = MonadCfgEnv::new_with_spec(spec);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(authority))
+            .data(input)
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .gas_priority_fee(Some(0))
+            .authorization_list(vec![Either::Right(make_recovered_auth_to(
+                authority,
+                delegated_address,
+            ))])
+            .build_fill();
+
+        evm.transact(tx).expect("transaction should execute")
+    }
+
+    #[test]
+    fn test_same_transaction_delegated_staking_call_reverts() {
+        let input = Bytes::copy_from_slice(&getEpochCall::SELECTOR);
+        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
+        {
+            let result = run_same_transaction_delegated_call(spec, STAKING_ADDRESS, input.clone());
+            let authority = result
+                .state
+                .get(&Address::from([0x22; 20]))
+                .expect("authority should be in output state");
+            assert_eq!(
+                authority.info.code.as_ref().and_then(Bytecode::eip7702_address),
+                Some(STAKING_ADDRESS),
+                "authorization should survive the reverted call on {spec:?}"
+            );
+            assert!(
+                matches!(&result.result, ExecutionResult::Revert { output, .. } if output.is_empty()),
+                "delegated staking call should revert on {spec:?}, got {:?}",
+                result.result
+            );
+        }
+    }
+
+    #[test]
+    fn test_same_transaction_delegated_reserve_balance_call_reverts() {
+        let input = Bytes::copy_from_slice(&DIPPED_INTO_RESERVE_SELECTOR);
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+            let result =
+                run_same_transaction_delegated_call(spec, RESERVE_BALANCE_ADDRESS, input.clone());
+            let authority = result
+                .state
+                .get(&Address::from([0x22; 20]))
+                .expect("authority should be in output state");
+            assert_eq!(
+                authority.info.code.as_ref().and_then(Bytecode::eip7702_address),
+                Some(RESERVE_BALANCE_ADDRESS),
+                "authorization should survive the reverted call on {spec:?}"
+            );
+            assert!(
+                matches!(&result.result, ExecutionResult::Revert { output, .. } if output.is_empty()),
+                "delegated reserve-balance call should revert on {spec:?}, got {:?}",
+                result.result
+            );
+        }
+    }
+
+    #[test]
+    fn reserve_tracker_observes_same_transaction_sender_delegation() {
+        let sender = Address::from([0x11; 20]);
+        let target = Address::from([0x22; 20]);
+        let delegated_address = Address::from([0x33; 20]);
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(12), ..Default::default() },
+        );
+        db.insert_account_info(
+            target,
+            AccountInfo::default().with_code(reserve_balance_query_code()),
+        );
+
+        let mut ctx = monad_context_with_db(db);
+        ctx.chain.max_reserve_balance = U256::from(10);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(sender)
+            .to(target)
+            .value(U256::from(3))
+            .gas_limit(100_000)
+            .gas_price(0)
+            .gas_priority_fee(Some(0))
+            .authorization_list(vec![Either::Right(make_recovered_auth_to_with_nonce(
+                sender,
+                delegated_address,
+                1,
+            ))])
+            .build_fill();
+
+        let result = evm.transact(tx).expect("transaction should succeed");
+        let output = result.result.output().expect("contract should return reserve status");
+        assert_eq!(output[31], 1, "sender delegation must be visible to reserve tracking");
+        let sender_account = result.state.get(&sender).expect("sender should be in output state");
+        assert_eq!(
+            sender_account.info.code.as_ref().and_then(Bytecode::eip7702_address),
+            Some(delegated_address)
+        );
     }
 
     #[test]
