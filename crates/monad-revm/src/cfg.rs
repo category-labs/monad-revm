@@ -198,8 +198,8 @@ impl Cfg for MonadCfgEnv {
         <CfgEnv<MonadHardfork> as Cfg>::is_eip7708_disabled(&self.0)
     }
 
-    fn is_eip7708_delayed_burn_disabled(&self) -> bool {
-        <CfgEnv<MonadHardfork> as Cfg>::is_eip7708_delayed_burn_disabled(&self.0)
+    fn is_eip8246_delayed_clear_disabled(&self) -> bool {
+        <CfgEnv<MonadHardfork> as Cfg>::is_eip8246_delayed_clear_disabled(&self.0)
     }
 
     fn memory_limit(&self) -> u64 {
@@ -221,6 +221,10 @@ impl Cfg for MonadCfgEnv {
 
     fn is_amsterdam_eip8037_enabled(&self) -> bool {
         <CfgEnv<MonadHardfork> as Cfg>::is_amsterdam_eip8037_enabled(&self.0)
+    }
+
+    fn is_amsterdam_eip2780_enabled(&self) -> bool {
+        <CfgEnv<MonadHardfork> as Cfg>::is_amsterdam_eip2780_enabled(&self.0)
     }
 }
 
@@ -268,10 +272,14 @@ mod tests {
     }
 
     #[test]
-    fn test_eip8037_is_disabled_for_current_monad_specs() {
+    fn test_amsterdam_gas_rules_are_disabled_for_current_monad_specs() {
         for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
         {
             let cfg = MonadCfgEnv::new_with_spec(spec);
+            assert!(
+                !cfg.is_amsterdam_eip2780_enabled(),
+                "EIP-2780 must remain disabled for {spec:?}"
+            );
             assert!(
                 !cfg.is_amsterdam_eip8037_enabled(),
                 "EIP-8037 must remain disabled for {spec:?}"

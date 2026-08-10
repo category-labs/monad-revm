@@ -430,7 +430,7 @@ fn reverted_addresses_from_entry(entry: &JournalEntry) -> Vec<Address> {
         | JournalEntry::StorageChanged { address, .. }
         | JournalEntry::StorageWarmed { address, .. }
         | JournalEntry::TransientStorageChange { address, .. }
-        | JournalEntry::CodeChange { address } => vec![*address],
+        | JournalEntry::CodeChange { address, .. } => vec![*address],
         JournalEntry::BalanceTransfer { from, to, .. } => vec![*from, *to],
         JournalEntry::AccountDestroyed { address, target, .. } => vec![*address, *target],
     }
