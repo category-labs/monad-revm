@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
-      - name: Check default features
-        run: cargo check --workspace --all-targets
+      - name: Check all features
+        run: cargo check --workspace --all-targets --all-features
       - name: Check no_std library
         run: cargo check --workspace --no-default-features --lib
 
@@ -38,6 +38,10 @@ jobs:
             args: ''
           - features: memory_limit
             args: '--features memory_limit'
+          - features: serde
+            args: '--features serde'
+          - features: serde, memory_limit
+            args: '--features serde,memory_limit'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
@@ -54,9 +58,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-targets
+      - run: cargo build --workspace --all-targets --all-features
 
   test:
     name: cargo test
@@ -64,10 +68,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
       - name: Test default features
         run: cargo test --workspace
+      - name: Test all features
+        run: cargo test --workspace --all-features
       - name: Test no default features
         run: cargo test --workspace --no-default-features
 
@@ -77,11 +83,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets --all-features
         env:
           RUSTFLAGS: -Dwarnings
 
@@ -91,7 +97,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+
+  package:
+    name: cargo publish dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish -p monad-revm --dry-run
