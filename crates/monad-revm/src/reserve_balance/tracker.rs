@@ -30,15 +30,63 @@ pub struct ReserveBalanceInit<'a> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReserveBalanceTracker {
     tracking_enabled: bool,
+    transaction: ReserveBalanceTransactionContext,
+    policy: ReserveBalancePolicy,
+    violation_thresholds: HashMap<Address, Option<U256>>,
+    failed: HashSet<Address>,
+}
+
+/// Transaction-scoped inputs that remain stable across frame hardfork changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReserveBalanceTransactionContext {
     chain: MonadChainContext,
-    use_recent_code_hash: bool,
     sender: Address,
     sender_gas_fees: U256,
     sender_is_delegated: bool,
     sender_can_dip: bool,
-    allow_init_selfdestruct_exemption: bool,
-    violation_thresholds: HashMap<Address, Option<U256>>,
-    failed: HashSet<Address>,
+}
+
+/// Hardfork-dependent rules used to evaluate reserve-balance violations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ReserveBalancePolicy {
+    subject_code: SubjectCodePolicy,
+    init_selfdestruct: InitSelfdestructPolicy,
+}
+
+impl ReserveBalancePolicy {
+    /// Derives reserve-balance behavior exhaustively for a Monad hardfork.
+    const fn for_spec(spec: MonadHardfork) -> Self {
+        match spec {
+            MonadHardfork::MonadEight => Self {
+                subject_code: SubjectCodePolicy::Current,
+                init_selfdestruct: InitSelfdestructPolicy::EnforceReserve,
+            },
+            MonadHardfork::MonadNine | MonadHardfork::MonadNext => Self {
+                subject_code: SubjectCodePolicy::Current,
+                init_selfdestruct: InitSelfdestructPolicy::Exempt,
+            },
+        }
+    }
+}
+
+/// Account code version used to determine whether reserve balance applies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SubjectCodePolicy {
+    /// Use the code present before the transaction.
+    #[default]
+    Original,
+    /// Use the most recently journaled code.
+    Current,
+}
+
+/// Treatment of contracts created and self-destructed in the same transaction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum InitSelfdestructPolicy {
+    /// Enforce the normal reserve requirement.
+    #[default]
+    EnforceReserve,
+    /// Exempt the account from the reserve requirement.
+    Exempt,
 }
 
 impl ReserveBalanceTracker {
@@ -61,14 +109,15 @@ impl ReserveBalanceTracker {
     pub fn init(&mut self, init: ReserveBalanceInit<'_>) {
         self.clear();
         self.tracking_enabled = true;
-        self.chain = init.chain.clone();
-        self.use_recent_code_hash = MonadHardfork::MonadEight.is_enabled_in(init.spec);
-        self.sender = init.sender;
-        self.sender_is_delegated = init.sender_is_delegated;
-        self.allow_init_selfdestruct_exemption = MonadHardfork::MonadNine.is_enabled_in(init.spec);
-        self.sender_gas_fees = U256::from(init.effective_gas_price) * U256::from(init.gas_limit);
-        self.sender_can_dip = init.chain.sender_can_dip(self.sender, init.sender_is_delegated);
-        self.update_loaded_account(init.sender_account, self.sender);
+        self.transaction = ReserveBalanceTransactionContext {
+            chain: init.chain.clone(),
+            sender: init.sender,
+            sender_gas_fees: U256::from(init.effective_gas_price) * U256::from(init.gas_limit),
+            sender_is_delegated: init.sender_is_delegated,
+            sender_can_dip: init.chain.sender_can_dip(init.sender, init.sender_is_delegated),
+        };
+        self.policy = ReserveBalancePolicy::for_spec(init.spec);
+        self.update_loaded_account(init.sender_account, init.sender);
     }
 
     /// Rebases tracked accounts onto replacement journal state and chain metadata.
@@ -81,9 +130,32 @@ impl ReserveBalanceTracker {
             return;
         }
 
+        self.transaction.chain = chain.clone();
+        self.transaction.sender_can_dip =
+            chain.sender_can_dip(self.transaction.sender, self.transaction.sender_is_delegated);
+        self.recompute_tracked_accounts(state);
+    }
+
+    /// Reconfigures hardfork-dependent reserve policy for the active frame.
+    ///
+    /// This preserves transaction-scoped sender, gas, and chain invariants while recomputing
+    /// accounts already affected by reserve tracking under the selected hardfork.
+    pub fn reconfigure(&mut self, spec: MonadHardfork, state: &revm::state::EvmState) {
+        if !self.tracking_enabled {
+            return;
+        }
+
+        let policy = ReserveBalancePolicy::for_spec(spec);
+        if self.policy == policy {
+            return;
+        }
+
+        self.policy = policy;
+        self.recompute_tracked_accounts(state);
+    }
+
+    fn recompute_tracked_accounts(&mut self, state: &revm::state::EvmState) {
         let tracked = core::mem::take(&mut self.violation_thresholds);
-        self.chain = chain.clone();
-        self.sender_can_dip = chain.sender_can_dip(self.sender, self.sender_is_delegated);
         self.failed.clear();
 
         for address in tracked.into_keys() {
@@ -105,7 +177,7 @@ impl ReserveBalanceTracker {
 
     /// Recomputes the violation status of an address after code changes.
     pub fn on_set_code(&mut self, account: Option<&Account>, address: Address, code: &Bytecode) {
-        if !self.tracking_enabled || !self.use_recent_code_hash {
+        if !self.tracking_enabled || self.policy.subject_code != SubjectCodePolicy::Current {
             return;
         }
 
@@ -145,7 +217,7 @@ impl ReserveBalanceTracker {
             return;
         };
 
-        if self.allow_init_selfdestruct_exemption
+        if self.policy.init_selfdestruct == InitSelfdestructPolicy::Exempt
             && account.is_selfdestructed()
             && account.is_created_locally()
         {
@@ -176,7 +248,7 @@ impl ReserveBalanceTracker {
     }
 
     fn pretx_reserve(&self, address: Address, account: &Account) -> U256 {
-        self.chain.max_reserve_balance(address).min(account.original_info().balance)
+        self.transaction.chain.max_reserve_balance(address).min(account.original_info().balance)
     }
 
     fn compute_violation_threshold(&self, account: &Account, address: Address) -> Option<U256> {
@@ -185,11 +257,11 @@ impl ReserveBalanceTracker {
         }
 
         let mut reserve = self.pretx_reserve(address, account);
-        if address == self.sender {
-            if self.sender_can_dip {
+        if address == self.transaction.sender {
+            if self.transaction.sender_can_dip {
                 return Some(U256::ZERO);
             }
-            reserve = reserve.checked_sub(self.sender_gas_fees)?;
+            reserve = reserve.checked_sub(self.transaction.sender_gas_fees)?;
         }
         Some(reserve)
     }
@@ -199,10 +271,9 @@ impl ReserveBalanceTracker {
             return false;
         }
 
-        let effective_code_hash = if self.use_recent_code_hash {
-            account.info.code_hash
-        } else {
-            account.original_info().code_hash
+        let effective_code_hash = match self.policy.subject_code {
+            SubjectCodePolicy::Original => account.original_info().code_hash,
+            SubjectCodePolicy::Current => account.info.code_hash,
         };
         if effective_code_hash.is_zero() || effective_code_hash == KECCAK_EMPTY {
             return true;
@@ -247,7 +318,15 @@ mod tests {
         account: &Account,
         delegated: bool,
     ) {
-        init_tracker_with_fees(tracker, chain, sender, account, delegated, 0, 0);
+        init_tracker_at(
+            tracker,
+            chain,
+            MonadHardfork::MonadNine,
+            sender,
+            account,
+            delegated,
+            (0, 0),
+        );
     }
 
     fn init_tracker_with_fees(
@@ -259,9 +338,30 @@ mod tests {
         effective_gas_price: u128,
         gas_limit: u64,
     ) {
+        init_tracker_at(
+            tracker,
+            chain,
+            MonadHardfork::MonadNine,
+            sender,
+            account,
+            delegated,
+            (effective_gas_price, gas_limit),
+        );
+    }
+
+    fn init_tracker_at(
+        tracker: &mut ReserveBalanceTracker,
+        chain: &MonadChainContext,
+        spec: MonadHardfork,
+        sender: Address,
+        account: &Account,
+        delegated: bool,
+        gas: (u128, u64),
+    ) {
+        let (effective_gas_price, gas_limit) = gas;
         tracker.init(ReserveBalanceInit {
             chain,
-            spec: MonadHardfork::MonadNine,
+            spec,
             sender,
             effective_gas_price,
             gas_limit,
@@ -398,6 +498,124 @@ mod tests {
         let mut tracker = ReserveBalanceTracker::default();
         let chain = sender_chain(Address::with_last_byte(1));
         tracker.rebase(&chain, &EvmState::default());
+        assert_eq!(tracker, ReserveBalanceTracker::default());
+    }
+
+    #[test]
+    fn reconfigure_updates_init_selfdestruct_policy_in_both_directions() {
+        let sender = Address::with_last_byte(1);
+        let tracked = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let mut tracked_account = debited_account(12, 9);
+        tracked_account.mark_created_locally();
+        tracked_account.mark_selfdestructed_locally();
+        let chain = sender_chain(sender);
+        let state = EvmState::from_iter([
+            (sender, sender_account.clone()),
+            (tracked, tracked_account.clone()),
+        ]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker_at(
+            &mut tracker,
+            &chain,
+            MonadHardfork::MonadEight,
+            sender,
+            &sender_account,
+            false,
+            (1, 2),
+        );
+        tracker.on_debit(Some(&tracked_account), tracked);
+        assert!(tracker.has_violation());
+        let transaction = tracker.transaction.clone();
+
+        tracker.reconfigure(MonadHardfork::MonadNine, &state);
+        assert!(!tracker.has_violation());
+        assert_eq!(tracker.transaction, transaction);
+
+        tracker.reconfigure(MonadHardfork::MonadEight, &state);
+        assert!(tracker.has_violation());
+        assert_eq!(tracker.transaction, transaction);
+
+        tracker.reconfigure(MonadHardfork::MonadNine, &state);
+        assert!(!tracker.has_violation());
+        assert_eq!(tracker.transaction, transaction);
+    }
+
+    #[test]
+    fn reserve_policy_is_exhaustive_for_supported_hardforks() {
+        let monad_eight = ReserveBalancePolicy::for_spec(MonadHardfork::MonadEight);
+        assert_eq!(monad_eight.subject_code, SubjectCodePolicy::Current);
+        assert_eq!(monad_eight.init_selfdestruct, InitSelfdestructPolicy::EnforceReserve);
+
+        let monad_nine = ReserveBalancePolicy::for_spec(MonadHardfork::MonadNine);
+        assert_eq!(monad_nine.subject_code, SubjectCodePolicy::Current);
+        assert_eq!(monad_nine.init_selfdestruct, InitSelfdestructPolicy::Exempt);
+        assert_eq!(ReserveBalancePolicy::for_spec(MonadHardfork::MonadNext), monad_nine);
+    }
+
+    #[test]
+    fn reconfigure_is_a_noop_for_hardforks_with_the_same_policy() {
+        let sender = Address::with_last_byte(1);
+        let tracked = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let tracked_account = debited_account(12, 9);
+        let chain = sender_chain(sender);
+        let state = EvmState::from_iter([
+            (sender, sender_account.clone()),
+            (tracked, tracked_account.clone()),
+        ]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker_at(
+            &mut tracker,
+            &chain,
+            MonadHardfork::MonadNine,
+            sender,
+            &sender_account,
+            false,
+            (1, 2),
+        );
+        tracker.on_debit(Some(&tracked_account), tracked);
+        let before = tracker.clone();
+
+        tracker.reconfigure(MonadHardfork::MonadNext, &state);
+        assert_eq!(tracker, before);
+    }
+
+    #[test]
+    fn reconfigure_does_not_enroll_untracked_accounts() {
+        let sender = Address::with_last_byte(1);
+        let unrelated = Address::with_last_byte(2);
+        let sender_account = debited_account(12, 12);
+        let unrelated_account = debited_account(12, 9);
+        let chain = sender_chain(sender);
+        let state = EvmState::from_iter([
+            (sender, sender_account.clone()),
+            (unrelated, unrelated_account.clone()),
+        ]);
+        let mut tracker = ReserveBalanceTracker::default();
+
+        init_tracker_at(
+            &mut tracker,
+            &chain,
+            MonadHardfork::MonadEight,
+            sender,
+            &sender_account,
+            false,
+            (0, 0),
+        );
+        tracker.reconfigure(MonadHardfork::MonadNine, &state);
+        assert!(!tracker.has_violation());
+
+        tracker.on_debit(Some(&unrelated_account), unrelated);
+        assert!(tracker.has_violation());
+    }
+
+    #[test]
+    fn reconfigure_is_a_noop_when_tracking_is_disabled() {
+        let mut tracker = ReserveBalanceTracker::default();
+        tracker.reconfigure(MonadHardfork::MonadNine, &EvmState::default());
         assert_eq!(tracker, ReserveBalanceTracker::default());
     }
 }

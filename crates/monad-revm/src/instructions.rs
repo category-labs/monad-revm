@@ -1,38 +1,104 @@
 use crate::MonadHardfork;
+use core::ops::Deref;
 use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::{EthInstructions, InstructionProvider},
     interpreter::{
-        instructions::{gas_table_spec, instruction_table, Instruction},
+        instructions::{gas_table_spec, instruction_table, GasTable, Instruction},
         interpreter::EthInterpreter,
-        Host,
+        Host, InstructionTable,
     },
-    primitives::hardfork::SpecId,
 };
 
-/// Type alias for Monad instructions.
-pub type MonadInstructions<CTX> = EthInstructions<EthInterpreter, CTX>;
+/// Monad instruction provider with exact hardfork identity.
+#[derive(Debug)]
+pub struct MonadInstructions<CTX> {
+    hardfork: MonadHardfork,
+    inner: EthInstructions<EthInterpreter, CTX>,
+}
+
+impl<CTX: Host> Clone for MonadInstructions<CTX> {
+    fn clone(&self) -> Self {
+        Self { hardfork: self.hardfork, inner: self.inner.clone() }
+    }
+}
+
+impl<CTX: Host> MonadInstructions<CTX> {
+    /// Returns the selected Monad hardfork.
+    pub const fn hardfork(&self) -> MonadHardfork {
+        self.hardfork
+    }
+
+    /// Wraps a custom Ethereum instruction provider for an exact Monad hardfork.
+    pub fn from_inner(
+        hardfork: MonadHardfork,
+        inner: EthInstructions<EthInterpreter, CTX>,
+    ) -> Self {
+        assert_eq!(
+            inner.spec,
+            hardfork.into_eth_spec(),
+            "Ethereum and Monad instruction specs must match"
+        );
+        Self { hardfork, inner }
+    }
+
+    /// Consumes this provider and returns its Ethereum instruction tables.
+    pub fn into_inner(self) -> EthInstructions<EthInterpreter, CTX> {
+        self.inner
+    }
+
+    /// Inserts an instruction and its static gas cost.
+    pub fn insert_instruction(
+        &mut self,
+        opcode: u8,
+        instruction: Instruction<EthInterpreter, CTX>,
+        gas: u16,
+    ) {
+        self.inner.insert_instruction(opcode, instruction, gas);
+    }
+
+    /// Inserts a static gas cost.
+    pub fn insert_gas(&mut self, opcode: u8, gas: u16) {
+        self.inner.insert_gas(opcode, gas);
+    }
+
+    /// Returns the mutable instruction table.
+    pub fn instruction_table_mut(&mut self) -> &mut InstructionTable<EthInterpreter, CTX> {
+        self.inner.instruction_table_mut()
+    }
+
+    /// Returns the mutable static gas table.
+    pub fn gas_table_mut(&mut self) -> &mut GasTable {
+        self.inner.gas_table_mut()
+    }
+}
+
+impl<CTX> Deref for MonadInstructions<CTX> {
+    type Target = EthInstructions<EthInterpreter, CTX>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<CTX: Host> InstructionProvider for MonadInstructions<CTX> {
+    type Context = CTX;
+    type InterpreterTypes = EthInterpreter;
+
+    fn instruction_table(&self) -> &InstructionTable<Self::InterpreterTypes, Self::Context> {
+        self.inner.instruction_table()
+    }
+
+    fn gas_table(&self) -> &GasTable {
+        self.inner.gas_table()
+    }
+}
 
 /// Instruction provider that follows Monad hardfork changes between frames.
 #[auto_impl::auto_impl(&mut, Box)]
 pub trait MonadInstructionProvider: InstructionProvider {
     /// Selects the instructions for a Monad hardfork.
     fn set_spec(&mut self, spec: MonadHardfork);
-
-    /// Selects the instructions for a frame's underlying Ethereum hardfork.
-    fn set_frame_spec(&mut self, spec: SpecId);
-}
-
-/// Maps a frame's Ethereum runtime spec to its Monad instruction and precompile behavior.
-///
-/// MonadNine and MonadNext currently share Osaka behavior, so an Osaka frame restores the
-/// MonadNine provider configuration.
-pub(crate) const fn monad_frame_spec(spec: SpecId) -> MonadHardfork {
-    if spec.is_enabled_in(SpecId::OSAKA) {
-        MonadHardfork::MonadNine
-    } else {
-        MonadHardfork::MonadEight
-    }
 }
 
 /// Monad-specific gas parameters for a given hardfork.
@@ -169,18 +235,14 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert), 0);
     }
 
-    instructions
+    MonadInstructions::from_inner(spec, instructions)
 }
 
 impl<CTX: Host> MonadInstructionProvider for MonadInstructions<CTX> {
     fn set_spec(&mut self, spec: MonadHardfork) {
-        if self.spec != spec.into_eth_spec() {
+        if self.hardfork != spec {
             *self = monad_instructions(spec);
         }
-    }
-
-    fn set_frame_spec(&mut self, spec: SpecId) {
-        self.set_spec(monad_frame_spec(spec));
     }
 }
 
@@ -208,9 +270,10 @@ mod tests {
         precompiles::MonadPrecompiles,
         reserve_balance::{
             abi::RESERVE_BALANCE_ADDRESS, interface::IReserveBalance::dippedIntoReserveCall,
+            tracker::ReserveBalanceInit,
         },
         staking::{interface::IMonadStaking::getEpochCall, storage::STAKING_ADDRESS},
-        MonadCfgEnv,
+        MonadCfgEnv, MonadJournalTr,
     };
     use alloc::{string::String, vec, vec::Vec};
     use alloy_sol_types::SolCall;
@@ -219,13 +282,16 @@ mod tests {
     use revm::{
         bytecode::opcode,
         context::TxEnv,
-        context_interface::result::{ExecutionResult, HaltReason},
+        context_interface::{
+            result::{ExecutionResult, HaltReason},
+            ContextError, ContextTr,
+        },
         database::InMemoryDB,
         handler::{EvmTr, PrecompileProvider},
         inspector::InspectEvm,
         interpreter::{CallInputs, InterpreterResult},
         primitives::{hardfork::SpecId, Address, AddressSet, Bytes, TxKind, U256},
-        state::{AccountInfo, Bytecode},
+        state::{Account, AccountInfo, Bytecode},
         ExecuteEvm, Inspector,
     };
     use std::{cell::RefCell, rc::Rc};
@@ -494,6 +560,95 @@ mod tests {
     }
 
     #[derive(Clone, Debug)]
+    struct SwitchSpecsInspector {
+        specs: Vec<(Address, MonadHardfork)>,
+    }
+
+    impl Inspector<MonadContext<InMemoryDB>> for SwitchSpecsInspector {
+        fn call(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &mut CallInputs,
+        ) -> Option<revm::interpreter::CallOutcome> {
+            if let Some((_, spec)) =
+                self.specs.iter().find(|(target, _)| *target == inputs.target_address)
+            {
+                let mut cfg = context.cfg.clone().into_inner();
+                cfg.spec = *spec;
+                context.cfg = MonadCfgEnv::from(cfg);
+            }
+            None
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct SwitchSpecAndFailReturnInspector {
+        target: Address,
+        spec: MonadHardfork,
+    }
+
+    impl Inspector<MonadContext<InMemoryDB>> for SwitchSpecAndFailReturnInspector {
+        fn call(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &mut CallInputs,
+        ) -> Option<revm::interpreter::CallOutcome> {
+            if inputs.target_address == self.target {
+                let mut cfg = context.cfg.clone().into_inner();
+                cfg.spec = self.spec;
+                context.cfg = MonadCfgEnv::from(cfg);
+            }
+            None
+        }
+
+        fn call_end(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &CallInputs,
+            _outcome: &mut revm::interpreter::CallOutcome,
+        ) {
+            if inputs.target_address == self.target {
+                *context.error() = Err(ContextError::Custom("intentional return failure".into()));
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct SwitchSpecWithReserveAccountInspector {
+        target: Address,
+        tracked: Address,
+        spec: MonadHardfork,
+    }
+
+    impl Inspector<MonadContext<InMemoryDB>> for SwitchSpecWithReserveAccountInspector {
+        fn call(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &mut CallInputs,
+        ) -> Option<revm::interpreter::CallOutcome> {
+            if inputs.target_address == self.target {
+                let mut account = Account::from(AccountInfo {
+                    balance: U256::from(12_000_000_000_000_000_000u128),
+                    ..Default::default()
+                });
+                account.info.balance = U256::from(9_000_000_000_000_000_000u128);
+                account.mark_created_locally();
+                account.mark_selfdestructed_locally();
+                context.journaled_state.state.insert(self.tracked, account.clone());
+                context
+                    .journaled_state
+                    .reserve_balance_mut()
+                    .on_debit(Some(&account), self.tracked);
+
+                let mut cfg = context.cfg.clone().into_inner();
+                cfg.spec = self.spec;
+                context.cfg = MonadCfgEnv::from(cfg);
+            }
+            None
+        }
+    }
+
+    #[derive(Clone, Debug)]
     struct TrackingPrecompiles {
         inner: MonadPrecompiles,
         selected_specs: Rc<RefCell<Vec<MonadHardfork>>>,
@@ -512,6 +667,42 @@ mod tests {
             context: &mut MonadContext<InMemoryDB>,
             inputs: &CallInputs,
         ) -> Result<Option<Self::Output>, String> {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::run(&mut self.inner, context, inputs)
+        }
+
+        fn warm_addresses(&self) -> &AddressSet {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::warm_addresses(&self.inner)
+        }
+
+        fn contains(&self, address: &Address) -> bool {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::contains(&self.inner, address)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct ReserveTrackingPrecompiles {
+        inner: MonadPrecompiles,
+        violations: Rc<RefCell<Vec<bool>>>,
+        observed_address: Address,
+    }
+
+    impl PrecompileProvider<MonadContext<InMemoryDB>> for ReserveTrackingPrecompiles {
+        type Output = InterpreterResult;
+
+        fn set_spec(&mut self, spec: MonadHardfork) -> bool {
+            PrecompileProvider::<MonadContext<InMemoryDB>>::set_spec(&mut self.inner, spec)
+        }
+
+        fn run(
+            &mut self,
+            context: &mut MonadContext<InMemoryDB>,
+            inputs: &CallInputs,
+        ) -> Result<Option<Self::Output>, String> {
+            if inputs.bytecode_address == self.observed_address {
+                self.violations
+                    .borrow_mut()
+                    .push(context.journaled_state.reserve_balance().has_violation());
+            }
             PrecompileProvider::<MonadContext<InMemoryDB>>::run(&mut self.inner, context, inputs)
         }
 
@@ -724,6 +915,131 @@ mod tests {
         result.tx_gas_used()
     }
 
+    fn run_reserve_policy_transition(
+        parent_spec: MonadHardfork,
+        child_spec: MonadHardfork,
+    ) -> (Vec<bool>, bool) {
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let child = Address::from([0x33; 20]);
+        let tracked = Address::from([0x44; 20]);
+        let identity = revm::precompile::u64_to_address(4);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo {
+                balance: U256::from(100_000_000_000_000_000_000u128),
+                ..Default::default()
+            },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(child, 0)))),
+        );
+        db.insert_account_info(
+            child,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(identity, 0)))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector =
+            SwitchSpecWithReserveAccountInspector { target: child, tracked, spec: child_spec };
+        let violations = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = ReserveTrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(parent_spec),
+            violations: Rc::clone(&violations),
+            observed_address: identity,
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+        let chain = evm.ctx().chain.clone();
+        let sender_account = Account::from(AccountInfo {
+            balance: U256::from(100_000_000_000_000_000_000u128),
+            ..Default::default()
+        });
+        evm.ctx().journaled_state.reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &chain,
+            spec: parent_spec,
+            sender: caller,
+            effective_gas_price: 0,
+            gas_limit: 1_000_000,
+            sender_is_delegated: false,
+            sender_account: Some(&sender_account),
+        });
+        evm.ctx().journaled_state.set_preserve_reserve_balance_tracker(true);
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(tx).expect("reserve-policy transition should execute");
+        assert!(
+            matches!(result, ExecutionResult::Success { .. }),
+            "reserve-policy transition should succeed: {parent_spec:?} -> {child_spec:?}"
+        );
+
+        let final_violation = evm.ctx().journal().reserve_balance().has_violation();
+        let observed = violations.take();
+        (observed, final_violation)
+    }
+
+    fn run_nested_exact_spec_transition() -> Vec<MonadHardfork> {
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let child = Address::from([0x33; 20]);
+        let grandchild = Address::from([0x44; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(child, 0)))),
+        );
+        db.insert_account_info(
+            child,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(grandchild, 0)))),
+        );
+        db.insert_account_info(
+            grandchild,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(vec![opcode::STOP]))),
+        );
+
+        let parent_spec = MonadHardfork::MonadNext;
+        let child_spec = MonadHardfork::MonadNine;
+        let grandchild_spec = MonadHardfork::MonadEight;
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector = SwitchSpecsInspector {
+            specs: vec![(child, child_spec), (grandchild, grandchild_spec)],
+        };
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = TrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(parent_spec),
+            selected_specs: Rc::clone(&selected_specs),
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.inspect_one_tx(tx).expect("nested hardfork transitions should execute");
+        assert!(matches!(result, ExecutionResult::Success { .. }));
+        selected_specs.take()
+    }
+
     #[cfg(feature = "memory_limit")]
     fn run_memory_limit_contract(offset: u32) -> ExecutionResult<HaltReason> {
         let caller = Address::from([0x11; 20]);
@@ -816,6 +1132,16 @@ mod tests {
     }
 
     #[test]
+    fn test_instruction_provider_preserves_exact_monad_spec() {
+        let mut instructions =
+            monad_instructions::<MonadContext<InMemoryDB>>(MonadHardfork::MonadNine);
+        assert_eq!(instructions.hardfork(), MonadHardfork::MonadNine);
+
+        instructions.set_spec(MonadHardfork::MonadNext);
+        assert_eq!(instructions.hardfork(), MonadHardfork::MonadNext);
+    }
+
+    #[test]
     fn test_call_like_memory_expansion_cost_is_spec_dependent() {
         let expanded_words = (0x2000 + 0x20) / 32;
         let standard_cost = standard_memory_cost(expanded_words);
@@ -871,6 +1197,8 @@ mod tests {
         for (parent_spec, child_spec) in [
             (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
             (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+            (MonadHardfork::MonadNext, MonadHardfork::MonadNine),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadNext),
         ] {
             let base = run_immediate_precompile_transition(parent_spec, child_spec, 0);
             let parent_expanded =
@@ -881,6 +1209,37 @@ mod tests {
                 "parent frame should restore {parent_spec:?} pricing after an immediate precompile"
             );
         }
+    }
+
+    #[test]
+    fn test_exact_specs_restore_across_nested_frames() {
+        let selected_specs = run_nested_exact_spec_transition();
+        assert!(
+            selected_specs.windows(5).any(|specs| {
+                specs
+                    == [
+                        MonadHardfork::MonadNext,
+                        MonadHardfork::MonadNine,
+                        MonadHardfork::MonadEight,
+                        MonadHardfork::MonadNine,
+                        MonadHardfork::MonadNext,
+                    ]
+            }),
+            "frame restoration should preserve exact Monad hardfork identity: {selected_specs:?}"
+        );
+    }
+
+    #[test]
+    fn test_reserve_policy_follows_and_restores_frame_spec() {
+        let (observed, final_violation) =
+            run_reserve_policy_transition(MonadHardfork::MonadEight, MonadHardfork::MonadNine);
+        assert_eq!(observed, [false], "MonadNine child should apply the exemption");
+        assert!(final_violation, "MonadEight parent policy should be restored");
+
+        let (observed, final_violation) =
+            run_reserve_policy_transition(MonadHardfork::MonadNine, MonadHardfork::MonadEight);
+        assert_eq!(observed, [true], "MonadEight child should enforce the reserve");
+        assert!(!final_violation, "MonadNine parent policy should be restored");
     }
 
     #[test]
@@ -928,6 +1287,8 @@ mod tests {
             .gas_price(0)
             .build_fill();
         assert!(evm.inspect_one_tx(first_tx).is_err());
+        assert_eq!(evm.0.instruction.hardfork(), parent_spec);
+        assert_eq!(selected_specs.borrow().last(), Some(&parent_spec));
 
         let mut cfg = evm.ctx().cfg.clone().into_inner();
         cfg.spec = parent_spec;
@@ -947,6 +1308,87 @@ mod tests {
                 .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
             "the next root frame should replace the failed child provider spec"
         );
+    }
+
+    #[test]
+    fn test_parent_frame_spec_is_restored_after_return_error() {
+        let parent_spec = MonadHardfork::MonadNext;
+        let child_spec = MonadHardfork::MonadEight;
+        let caller = Address::from([0x11; 20]);
+        let parent = Address::from([0x22; 20]);
+        let child = Address::from([0x33; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            parent,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from(call_then_store_at(child, 0)))),
+        );
+        db.insert_account_info(
+            child,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(vec![opcode::STOP]))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(parent_spec));
+        let inspector = SwitchSpecAndFailReturnInspector { target: child, spec: child_spec };
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = TrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(parent_spec),
+            selected_specs: Rc::clone(&selected_specs),
+        };
+        let mut evm = ctx.build_monad_with_inspector(inspector).with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(parent))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        assert!(evm.inspect_one_tx(tx).is_err());
+        assert_eq!(evm.0.instruction.hardfork(), parent_spec);
+        assert_eq!(selected_specs.borrow().last(), Some(&parent_spec));
+    }
+
+    #[test]
+    fn test_root_frame_spec_remains_selected_after_return() {
+        let spec = MonadHardfork::MonadNext;
+        let caller = Address::from([0x11; 20]);
+        let contract = Address::from([0x22; 20]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo { balance: U256::from(1_000_000u64), ..Default::default() },
+        );
+        db.insert_account_info(
+            contract,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(vec![opcode::STOP]))),
+        );
+
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let selected_specs = Rc::new(RefCell::new(Vec::new()));
+        let precompiles = TrackingPrecompiles {
+            inner: MonadPrecompiles::new_with_spec(spec),
+            selected_specs: Rc::clone(&selected_specs),
+        };
+        let mut evm = ctx.build_monad().with_precompiles(precompiles);
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .kind(TxKind::Call(contract))
+            .gas_limit(1_000_000)
+            .gas_price(0)
+            .build_fill();
+        let result = evm.transact(tx).expect("root frame should execute").result;
+        assert!(matches!(result, ExecutionResult::Success { .. }));
+        assert_eq!(evm.0.instruction.hardfork(), spec);
+        assert_eq!(selected_specs.borrow().last(), Some(&spec));
     }
 
     #[test]

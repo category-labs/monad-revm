@@ -1,11 +1,11 @@
 // MonadEvm - wrapper around base Evm with Monad-specific types.
 use crate::{
-    instructions::{
-        monad_frame_spec, monad_instructions, MonadInstructionProvider, MonadInstructions,
-    },
+    instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
+    journal::MonadJournalTr,
     precompiles::MonadPrecompiles,
     MonadHardfork,
 };
+use alloc::vec::Vec;
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
     context_interface::{ContextTr, JournalTr},
@@ -15,6 +15,38 @@ use revm::{
     Database, Inspector,
 };
 
+/// Exact Monad hardforks selected for materialized execution frames.
+#[derive(Debug, Clone)]
+struct FrameSpecStack {
+    specs: Vec<MonadHardfork>,
+}
+
+impl FrameSpecStack {
+    fn new() -> Self {
+        Self { specs: Vec::with_capacity(8) }
+    }
+
+    fn clear(&mut self) {
+        self.specs.clear();
+    }
+
+    fn push(&mut self, spec: MonadHardfork) {
+        self.specs.push(spec);
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.specs.truncate(len);
+    }
+
+    fn current(&self) -> Option<MonadHardfork> {
+        self.specs.last().copied()
+    }
+
+    const fn len(&self) -> usize {
+        self.specs.len()
+    }
+}
+
 /// Monad EVM with custom gas costs and precompiles.
 #[derive(Debug, Clone)]
 pub struct MonadEvm<
@@ -23,7 +55,11 @@ pub struct MonadEvm<
     I = MonadInstructions<CTX>,
     P = MonadPrecompiles,
     F = EthFrame<EthInterpreter>,
->(pub Evm<CTX, INSP, I, P, F>);
+>(
+    /// Inner REVM instance.
+    pub Evm<CTX, INSP, I, P, F>,
+    FrameSpecStack,
+);
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
@@ -32,7 +68,7 @@ where
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
         let spec = ctx.cfg().spec();
-        Self(Evm {
+        Self::from_inner(Evm {
             ctx,
             inspector,
             instruction: monad_instructions(spec),
@@ -42,15 +78,33 @@ where
     }
 }
 
-impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
+impl<CTX, INSP, I, P, F> MonadEvm<CTX, INSP, I, P, F> {
+    /// Wraps a REVM instance whose frame stack is empty.
+    ///
+    /// Use this constructor instead of directly constructing the tuple so exact Monad frame
+    /// metadata stays synchronized with REVM's frame stack.
+    pub fn from_inner(inner: Evm<CTX, INSP, I, P, F>) -> Self {
+        assert!(inner.frame_stack.index().is_none(), "cannot wrap an EVM with active frames");
+        Self(inner, FrameSpecStack::new())
+    }
+
+    /// Consumes this wrapper and returns the inner REVM instance.
+    ///
+    /// The frame stack must be empty because the inner REVM does not retain exact Monad frame
+    /// metadata on its own.
+    pub fn into_inner(self) -> Evm<CTX, INSP, I, P, F> {
+        assert!(self.0.frame_stack.index().is_none(), "cannot unwrap an EVM with active frames");
+        self.0
+    }
+
     /// Consume self and return a new EVM with given Inspector.
-    pub fn with_inspector<OINSP>(self, inspector: OINSP) -> MonadEvm<CTX, OINSP, I, P> {
-        MonadEvm(self.0.with_inspector(inspector))
+    pub fn with_inspector<OINSP>(self, inspector: OINSP) -> MonadEvm<CTX, OINSP, I, P, F> {
+        MonadEvm(self.0.with_inspector(inspector), self.1)
     }
 
     /// Consume self and return a new EVM with given Precompiles.
-    pub fn with_precompiles<OP>(self, precompiles: OP) -> MonadEvm<CTX, INSP, I, OP> {
-        MonadEvm(self.0.with_precompiles(precompiles))
+    pub fn with_precompiles<OP>(self, precompiles: OP) -> MonadEvm<CTX, INSP, I, OP, F> {
+        MonadEvm(self.0.with_precompiles(precompiles), self.1)
     }
 
     /// Consume self and return the inner Inspector.
@@ -61,7 +115,8 @@ impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
 
 impl<CTX, INSP, I, P> InspectorEvmTr for MonadEvm<CTX, INSP, I, P>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: JournalExt> + ContextSetters,
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: JournalExt + MonadJournalTr>
+        + ContextSetters,
     I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
     INSP: Inspector<CTX, I::InterpreterTypes>,
@@ -95,9 +150,34 @@ where
     }
 }
 
+impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P, EthFrame<EthInterpreter>>
+where
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: MonadJournalTr>,
+    I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
+    P: PrecompileProvider<CTX, Output = InterpreterResult>,
+{
+    /// Applies all frame-scoped Monad behavior for an exact hardfork.
+    fn apply_frame_spec(&mut self, spec: MonadHardfork) {
+        self.0.instruction.set_spec(spec);
+        let precompiles_changed = self.0.precompiles.set_spec(spec);
+        self.0.ctx.journal_mut().reconfigure_reserve_balance(spec);
+        let precompiles_empty = self.0.ctx.journal().precompile_addresses().is_empty();
+        if precompiles_changed || precompiles_empty {
+            self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
+        }
+    }
+
+    /// Restores the current materialized frame's hardfork.
+    fn restore_current_frame_spec(&mut self) {
+        if let Some(spec) = self.1.current() {
+            self.apply_frame_spec(spec);
+        }
+    }
+}
+
 impl<CTX, INSP, I, P> EvmTr for MonadEvm<CTX, INSP, I, P, EthFrame<EthInterpreter>>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>>,
+    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: MonadJournalTr>,
     I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
 {
@@ -132,15 +212,26 @@ where
         ItemOrResult<&mut Self::Frame, <Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
-        let spec = self.0.ctx.cfg().spec();
-        self.0.instruction.set_spec(spec);
-        let precompiles_changed = self.0.precompiles.set_spec(spec);
-        let precompiles_empty = self.0.ctx.journal().precompile_addresses().is_empty();
-        if precompiles_changed || precompiles_empty {
-            self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
+        if self.0.frame_stack.index().is_none() {
+            self.1.clear();
         }
+        let spec = self.0.ctx.cfg().spec();
+        self.apply_frame_spec(spec);
         frame_input.memory.set_memory_limit(self.0.ctx.cfg().memory_limit());
-        self.0.frame_init(frame_input)
+
+        let expected_depth = self.0.frame_stack.index().map_or(1, |index| index + 2);
+        match self.0.frame_init(frame_input) {
+            Ok(ItemOrResult::Item(_)) => {
+                self.1.push(spec);
+                debug_assert_eq!(self.1.len(), expected_depth);
+                Ok(ItemOrResult::Item(self.0.frame_stack.get()))
+            }
+            Ok(ItemOrResult::Result(result)) => Ok(ItemOrResult::Result(result)),
+            Err(error) => {
+                self.restore_current_frame_spec();
+                Err(error)
+            }
+        }
     }
 
     fn frame_run(
@@ -159,16 +250,17 @@ where
         Option<<Self::Frame as FrameTr>::FrameResult>,
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
-        let result = self.0.frame_return_result(result)?;
-        if self.0.frame_stack.index().is_some() {
-            let eth_spec = self.0.frame_stack.get().interpreter.runtime_flag.spec_id;
-            let spec = monad_frame_spec(eth_spec);
-            self.0.instruction.set_frame_spec(eth_spec);
-            if self.0.precompiles.set_spec(spec) {
-                self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
-            }
+        let previous_depth = self.0.frame_stack.index();
+        let result = self.0.frame_return_result(result);
+        let current_depth = self.0.frame_stack.index();
+        let current_len = current_depth.map_or(0, |index| index + 1);
+        debug_assert!(current_depth == previous_depth || current_len < self.1.len());
+        self.1.truncate(current_len);
+        if current_depth.is_some() {
+            self.restore_current_frame_spec();
         }
-        Ok(result)
+        debug_assert_eq!(self.1.len(), current_len);
+        result
     }
 }
 

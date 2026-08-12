@@ -1,6 +1,6 @@
 //! Monad journal wrapper with reserve-balance tracking.
 
-use crate::reserve_balance::tracker::ReserveBalanceTracker;
+use crate::{reserve_balance::tracker::ReserveBalanceTracker, MonadHardfork};
 use alloc::{vec, vec::Vec};
 use core::ops::{Deref, DerefMut};
 use revm::{
@@ -29,6 +29,9 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 
     /// Returns the reserve-balance tracker mutably.
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker;
+
+    /// Reconfigures hardfork-dependent reserve policy for the active frame.
+    fn reconfigure_reserve_balance(&mut self, spec: MonadHardfork);
 
     /// Returns whether transaction boundaries preserve the reserve-balance tracker.
     fn preserves_reserve_balance_tracker(&self) -> bool {
@@ -111,6 +114,10 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
 
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker {
         &mut self.reserve_balance
+    }
+
+    fn reconfigure_reserve_balance(&mut self, spec: MonadHardfork) {
+        self.reserve_balance.reconfigure(spec, &self.inner.state);
     }
 
     fn preserves_reserve_balance_tracker(&self) -> bool {

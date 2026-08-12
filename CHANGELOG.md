@@ -22,6 +22,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Delegated initial frame construction to REVM so memory, EIP-7702, checkpoint, and runtime
   out-of-gas behavior continue to follow upstream changes. Monad now applies only its required
   delegated native-precompile address selection after upstream frame construction.
+- Replaced the `MonadInstructions` alias with an exact-hardfork provider and added
+  `MonadEvm::from_inner` and `MonadEvm::into_inner` for custom EVM construction.
 - Added the REVM 42 configuration surface while keeping Amsterdam EIP-2780 and EIP-8037 disabled
   for `MonadEight`, `MonadNine`, and `MonadNext`.
 
@@ -33,6 +35,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
   precompiles, including delegations installed by the current transaction.
 - Initialized reserve-balance tracking after authorization processing and before the initial
   value transfer, so same-transaction sender delegation and the transfer are both observed.
+- Preserved exact Monad hardfork identity across nested frames and modeled reserve-balance rules
+  as typed policies, so future hardforks can share or change reserve behavior deliberately.
 - Updated reserve-tracker rollback bookkeeping for REVM 42's expanded code-change journal entry.
 
 ## [0.5.1] - 2026-08-06
