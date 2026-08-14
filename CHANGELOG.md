@@ -2,7 +2,7 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
-## [0.6.0] - 2026-08-10
+## [0.6.0] - 2026-08-14
 
 ### Added
 
