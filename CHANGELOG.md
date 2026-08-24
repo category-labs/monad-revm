@@ -8,6 +8,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 - Added the `MonadTen` hardfork with MIP-8 page-level storage warming and SSTORE gas accounting,
   including call-frame rollback and EIP-2930 access-list behavior.
+- Scheduled `MonadTen` on mainnet for 2026-09-02 14:30 UTC.
 
 ### Changed
 
