@@ -22,11 +22,11 @@ storage accounting, Monad staking, and the Monad reserve-balance precompile.
 | Network | Chain ID | `MonadEight` | `MonadNine` | `MonadTen` | `MonadNext` |
 |---------|----------|--------------|-------------|------------|-------------|
 | Mainnet | `143` | 2025-11-20 14:30 UTC | 2026-03-19 14:30 UTC | 2026-09-02 14:30 UTC | Unscheduled |
-| Testnet | `10143` | 2025-11-19 14:30 UTC | 2026-03-10 14:30 UTC | Unscheduled | Unscheduled |
+| Testnet | `10143` | 2025-11-19 14:30 UTC | 2026-03-10 14:30 UTC | 2026-08-12 14:30 UTC | Unscheduled |
 
 Use `MonadHardfork::from_chain_and_timestamp(chain_id, timestamp)` to resolve a known network.
-Mainnet timestamps at or after the `MonadTen` activation resolve to `MonadTen`; testnet has no
-`MonadTen` activation yet, and unknown chain IDs return `None`.
+Mainnet and testnet timestamps at or after their respective `MonadTen` activations resolve to
+`MonadTen`; unknown chain IDs return `None`.
 `Context::monad()` deliberately defaults to `MonadTen` and does not perform schedule lookup.
 
 ## What Monad Changes
