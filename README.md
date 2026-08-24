@@ -15,7 +15,7 @@ storage accounting, Monad staking, and the Monad reserve-balance precompile.
 | **revm** | v42.0.1 |
 | **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadTen`, `MonadNext` |
 | **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine`, `MonadTen`, and `MonadNext` |
-| **Default Monad spec** | `MonadNine` |
+| **Default Monad spec** | `MonadTen` |
 
 ### Hardfork schedule
 
@@ -27,7 +27,7 @@ storage accounting, Monad staking, and the Monad reserve-balance precompile.
 Use `MonadHardfork::from_chain_and_timestamp(chain_id, timestamp)` to resolve a known network.
 Mainnet timestamps at or after the `MonadTen` activation resolve to `MonadTen`; testnet has no
 `MonadTen` activation yet, and unknown chain IDs return `None`.
-`Context::monad()` deliberately defaults to `MonadNine` and does not perform schedule lookup.
+`Context::monad()` deliberately defaults to `MonadTen` and does not perform schedule lookup.
 
 ## What Monad Changes
 

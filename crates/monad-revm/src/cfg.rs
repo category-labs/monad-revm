@@ -237,6 +237,7 @@ mod tests {
         let cfg = MonadCfgEnv::new();
 
         // Verify Monad-specific defaults
+        assert_eq!(cfg.spec(), MonadHardfork::MonadTen);
         assert_eq!(cfg.max_code_size(), MONAD_MAX_CODE_SIZE);
         assert_eq!(cfg.max_initcode_size(), MONAD_MAX_INITCODE_SIZE);
 
