@@ -111,6 +111,9 @@ where
     /// - EIP-7702: system sender cannot appear as an authority in authorization list
     /// - Skips header validation (prevrandao, excess_blob_gas) since Monad doesn't use these
     fn validate_env(&self, evm: &mut Self::Evm) -> Result<(), Self::Error> {
+        let spec = evm.ctx_ref().cfg().spec();
+        evm.ctx().journal_mut().set_monad_spec(spec);
+
         // Reject blob transactions (EIP-4844) - Monad does not support them
         let tx_type = TransactionType::from(evm.ctx().tx().tx_type());
         if tx_type == TransactionType::Eip4844 {

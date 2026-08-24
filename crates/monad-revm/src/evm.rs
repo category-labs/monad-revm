@@ -1,10 +1,9 @@
 // MonadEvm - wrapper around base Evm with Monad-specific types.
 use crate::{
-    instructions::{
-        monad_frame_spec, monad_instructions, MonadInstructionProvider, MonadInstructions,
-    },
+    api::exec::MonadContextTr,
+    instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
     precompiles::MonadPrecompiles,
-    MonadHardfork,
+    MonadJournalTr,
 };
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
@@ -27,7 +26,7 @@ pub struct MonadEvm<
 
 impl<CTX, INSP> MonadEvm<CTX, INSP, MonadInstructions<CTX>, MonadPrecompiles>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>>,
+    CTX: MonadContextTr,
 {
     /// Create a new Monad EVM with custom gas costs and precompiles.
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
@@ -61,7 +60,7 @@ impl<CTX, INSP, I, P> MonadEvm<CTX, INSP, I, P> {
 
 impl<CTX, INSP, I, P> InspectorEvmTr for MonadEvm<CTX, INSP, I, P>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>, Journal: JournalExt> + ContextSetters,
+    CTX: MonadContextTr<Journal: JournalExt> + ContextSetters,
     I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
     INSP: Inspector<CTX, I::InterpreterTypes>,
@@ -97,7 +96,7 @@ where
 
 impl<CTX, INSP, I, P> EvmTr for MonadEvm<CTX, INSP, I, P, EthFrame<EthInterpreter>>
 where
-    CTX: ContextTr<Cfg: Cfg<Spec = MonadHardfork>>,
+    CTX: MonadContextTr,
     I: MonadInstructionProvider<Context = CTX, InterpreterTypes = EthInterpreter>,
     P: PrecompileProvider<CTX, Output = InterpreterResult>,
 {
@@ -133,7 +132,11 @@ where
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
         let spec = self.0.ctx.cfg().spec();
-        self.0.instruction.set_spec(spec);
+        if self.0.frame_stack.index().is_none() {
+            self.0.instruction.set_spec(spec);
+        }
+        self.0.ctx.journal_mut().set_monad_spec(spec);
+        self.0.instruction.enter_frame(spec);
         let precompiles_changed = self.0.precompiles.set_spec(spec);
         let precompiles_empty = self.0.ctx.journal().precompile_addresses().is_empty();
         if precompiles_changed || precompiles_empty {
@@ -160,10 +163,13 @@ where
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
         let result = self.0.frame_return_result(result)?;
-        if self.0.frame_stack.index().is_some() {
-            let eth_spec = self.0.frame_stack.get().interpreter.runtime_flag.spec_id;
-            let spec = monad_frame_spec(eth_spec);
-            self.0.instruction.set_frame_spec(eth_spec);
+        let parent_spec = self
+            .0
+            .frame_stack
+            .index()
+            .map(|_| self.0.frame_stack.get().interpreter.runtime_flag.spec_id);
+        if let Some(spec) = self.0.instruction.return_from_frame(parent_spec) {
+            self.0.ctx.journal_mut().set_monad_spec(spec);
             if self.0.precompiles.set_spec(spec) {
                 self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
             }

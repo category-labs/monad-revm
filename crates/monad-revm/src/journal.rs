@@ -1,6 +1,10 @@
-//! Monad journal wrapper with reserve-balance tracking.
+//! Monad journal wrapper with reserve-balance and page-access tracking.
 
-use crate::reserve_balance::tracker::ReserveBalanceTracker;
+use crate::{
+    page::{PageAccessTracker, StoragePageKey},
+    reserve_balance::tracker::ReserveBalanceTracker,
+    MonadHardfork,
+};
 use alloc::{vec, vec::Vec};
 use core::ops::{Deref, DerefMut};
 use revm::{
@@ -30,6 +34,18 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Returns the reserve-balance tracker mutably.
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker;
 
+    /// Returns the active Monad hardfork for journal-specific behavior.
+    fn monad_spec(&self) -> MonadHardfork;
+
+    /// Updates the active Monad hardfork for journal-specific behavior.
+    fn set_monad_spec(&mut self, spec: MonadHardfork);
+
+    /// Returns the MIP-8 page access tracker.
+    fn page_access(&self) -> &PageAccessTracker;
+
+    /// Returns the MIP-8 page access tracker mutably.
+    fn page_access_mut(&mut self) -> &mut PageAccessTracker;
+
     /// Returns whether transaction boundaries preserve the reserve-balance tracker.
     fn preserves_reserve_balance_tracker(&self) -> bool {
         false
@@ -49,6 +65,8 @@ pub struct MonadJournal<DB: Database> {
     inner: Journal<DB>,
     reserve_balance: ReserveBalanceTracker,
     preserve_reserve_balance_tracker: bool,
+    monad_spec: MonadHardfork,
+    page_access: PageAccessTracker,
 }
 
 impl<DB: Database> MonadJournal<DB> {
@@ -58,7 +76,7 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     /// Creates a new Monad journal from an existing journal inner state.
-    pub const fn new_with_inner(
+    pub fn new_with_inner(
         database: DB,
         inner: JournalInner<JournalEntry>,
         reserve_balance: ReserveBalanceTracker,
@@ -67,7 +85,19 @@ impl<DB: Database> MonadJournal<DB> {
             inner: Journal::new_with_inner(database, inner),
             reserve_balance,
             preserve_reserve_balance_tracker: false,
+            monad_spec: MonadHardfork::default(),
+            page_access: PageAccessTracker::default(),
         }
+    }
+
+    #[inline]
+    const fn page_access_enabled(&self) -> bool {
+        MonadHardfork::MonadNext.is_enabled_in(self.monad_spec)
+    }
+
+    #[inline]
+    fn page_key(address: Address, key: StorageKey) -> StoragePageKey {
+        StoragePageKey::from_slot(address, key)
     }
 
     fn on_transfer(&mut self, from: Address, to: Address) {
@@ -85,6 +115,7 @@ impl<DB: Database> MonadJournal<DB> {
             .flatten()
             .flat_map(reverted_addresses_from_entry)
             .collect();
+        self.page_access.checkpoint_revert();
         self.inner.checkpoint_revert(checkpoint);
         self.reserve_balance.on_checkpoint_revert(reverted_addresses, &self.inner.state);
     }
@@ -111,6 +142,22 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
 
     fn reserve_balance_mut(&mut self) -> &mut ReserveBalanceTracker {
         &mut self.reserve_balance
+    }
+
+    fn monad_spec(&self) -> MonadHardfork {
+        self.monad_spec
+    }
+
+    fn set_monad_spec(&mut self, spec: MonadHardfork) {
+        self.monad_spec = spec;
+    }
+
+    fn page_access(&self) -> &PageAccessTracker {
+        &self.page_access
+    }
+
+    fn page_access_mut(&mut self) -> &mut PageAccessTracker {
+        &mut self.page_access
     }
 
     fn preserves_reserve_balance_tracker(&self) -> bool {
@@ -141,6 +188,8 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
             inner: Journal::new(database),
             reserve_balance: ReserveBalanceTracker::default(),
             preserve_reserve_balance_tracker: false,
+            monad_spec: MonadHardfork::default(),
+            page_access: PageAccessTracker::default(),
         }
     }
 
@@ -165,7 +214,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         address: Address,
         key: StorageKey,
     ) -> Result<StateLoad<StorageValue>, <Self::Database as Database>::Error> {
-        self.inner.sload(address, key)
+        self.sload_skip_cold_load(address, key, false).map_err(JournalLoadError::unwrap_db_error)
     }
 
     fn sstore(
@@ -174,7 +223,8 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         key: StorageKey,
         value: StorageValue,
     ) -> Result<StateLoad<SStoreResult>, <Self::Database as Database>::Error> {
-        self.inner.sstore(address, key, value)
+        self.sstore_skip_cold_load(address, key, value, false)
+            .map_err(JournalLoadError::unwrap_db_error)
     }
 
     fn tload(&mut self, address: Address, key: StorageKey) -> StorageValue {
@@ -210,6 +260,9 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
     }
 
     fn warm_access_list(&mut self, access_list: AddressMap<HashSet<StorageKey>>) {
+        if self.page_access_enabled() {
+            self.page_access.warm_access_list(&access_list);
+        }
         self.inner.warm_access_list(access_list)
     }
 
@@ -329,10 +382,12 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
     }
 
     fn checkpoint(&mut self) -> JournalCheckpoint {
+        self.page_access.checkpoint();
         self.inner.checkpoint()
     }
 
     fn checkpoint_commit(&mut self) {
+        self.page_access.checkpoint_commit();
         self.inner.checkpoint_commit()
     }
 
@@ -353,7 +408,15 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         balance: U256,
         spec_id: SpecId,
     ) -> Result<JournalCheckpoint, TransferError> {
-        let checkpoint = self.inner.create_account_checkpoint(caller, address, balance, spec_id)?;
+        self.page_access.checkpoint();
+        let checkpoint =
+            match self.inner.create_account_checkpoint(caller, address, balance, spec_id) {
+                Ok(checkpoint) => checkpoint,
+                Err(err) => {
+                    self.page_access.checkpoint_revert();
+                    return Err(err);
+                }
+            };
         self.on_transfer(caller, address);
         Ok(checkpoint)
     }
@@ -364,6 +427,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
 
     fn commit_tx(&mut self) {
         self.inner.commit_tx();
+        self.page_access.clear();
         if !self.preserve_reserve_balance_tracker {
             self.reserve_balance.clear();
         }
@@ -374,6 +438,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
             self.inner.journal.iter().flat_map(reverted_addresses_from_entry).collect::<Vec<_>>()
         });
         self.inner.discard_tx();
+        self.page_access.clear();
         if let Some(reverted_addresses) = reverted_addresses {
             self.reserve_balance.on_checkpoint_revert(reverted_addresses, &self.inner.state);
         } else {
@@ -382,6 +447,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
     }
 
     fn finalize(&mut self) -> Self::State {
+        self.page_access.clear();
         if !self.preserve_reserve_balance_tracker {
             self.reserve_balance.clear();
         }
@@ -395,7 +461,22 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         skip_cold_load: bool,
     ) -> Result<StateLoad<StorageValue>, JournalLoadError<<Self::Database as Database>::Error>>
     {
-        self.inner.sload_skip_cold_load(address, key, skip_cold_load)
+        if !self.page_access_enabled() {
+            return self.inner.sload_skip_cold_load(address, key, skip_cold_load);
+        }
+
+        let page_key = Self::page_key(address, key);
+        let is_cold = !self.page_access.is_read_accessed(&page_key);
+        if is_cold && skip_cold_load {
+            return Err(JournalLoadError::ColdLoadSkipped);
+        }
+
+        let storage = self.inner.sload_skip_cold_load(address, key, false)?;
+        if is_cold {
+            self.page_access.mark_read_accessed(page_key);
+        }
+
+        Ok(StateLoad::new(storage.data, is_cold))
     }
 
     fn sstore_skip_cold_load(
@@ -406,7 +487,22 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
         skip_cold_load: bool,
     ) -> Result<StateLoad<SStoreResult>, JournalLoadError<<Self::Database as Database>::Error>>
     {
-        self.inner.sstore_skip_cold_load(address, key, value, skip_cold_load)
+        if !self.page_access_enabled() {
+            return self.inner.sstore_skip_cold_load(address, key, value, skip_cold_load);
+        }
+
+        let page_key = Self::page_key(address, key);
+        let is_cold = !self.page_access.is_read_accessed(&page_key);
+        if is_cold && skip_cold_load {
+            return Err(JournalLoadError::ColdLoadSkipped);
+        }
+
+        let storage = self.inner.sstore_skip_cold_load(address, key, value, false)?;
+        if is_cold {
+            self.page_access.mark_read_accessed(page_key);
+        }
+
+        Ok(StateLoad::new(storage.data, is_cold))
     }
 
     fn load_account_info_skip_cold_load(
@@ -443,8 +539,20 @@ mod tests {
     use revm::{
         context_interface::journaled_state::JournalCheckpoint,
         database::{EmptyDB, InMemoryDB},
+        primitives::address,
         state::AccountInfo,
     };
+
+    fn journal_with_account(spec: MonadHardfork, address: Address) -> MonadJournal<InMemoryDB> {
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(address, AccountInfo::default());
+
+        let mut journal = MonadJournal::new(db);
+        journal.set_monad_spec(spec);
+        journal.set_spec_id(spec.into());
+        journal.load_account(address).expect("account should load");
+        journal
+    }
 
     #[test]
     fn checkpoint_revert_without_entries_is_noop() {
@@ -499,5 +607,75 @@ mod tests {
 
         assert!(!journal.reserve_balance().has_violation());
         assert!(journal.reserve_balance().tracking_enabled());
+    }
+
+    #[test]
+    fn same_page_sload_is_warm_in_monad_next() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+
+        let first = journal.sload(address, U256::ZERO).unwrap();
+        let second = journal.sload(address, U256::from(127)).unwrap();
+
+        assert!(first.is_cold);
+        assert!(!second.is_cold);
+    }
+
+    #[test]
+    fn same_page_sload_uses_slot_warmth_before_monad_next() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNine, address);
+
+        let first = journal.sload(address, U256::ZERO).unwrap();
+        let second = journal.sload(address, U256::from(127)).unwrap();
+
+        assert!(first.is_cold);
+        assert!(second.is_cold);
+    }
+
+    #[test]
+    fn different_page_sload_remains_cold_in_monad_next() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+
+        let first = journal.sload(address, U256::ZERO).unwrap();
+        let second = journal.sload(address, U256::from(128)).unwrap();
+
+        assert!(first.is_cold);
+        assert!(second.is_cold);
+    }
+
+    #[test]
+    fn access_list_warms_entire_page_in_monad_next() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut access_list = AddressMap::default();
+        access_list.insert(address, HashSet::from_iter([U256::ZERO]));
+
+        journal.warm_access_list(access_list);
+
+        assert!(!journal.sload(address, U256::from(127)).unwrap().is_cold);
+    }
+
+    #[test]
+    fn checkpoint_revert_restores_page_warmth() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let checkpoint = journal.checkpoint();
+        assert!(journal.sload(address, U256::ZERO).unwrap().is_cold);
+
+        journal.checkpoint_revert(checkpoint);
+
+        assert!(journal.sload(address, U256::from(1)).unwrap().is_cold);
+    }
+
+    #[test]
+    fn transaction_boundary_clears_page_warmth() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        assert!(journal.sload(address, U256::ZERO).unwrap().is_cold);
+        journal.commit_tx();
+
+        assert!(journal.sload(address, U256::from(1)).unwrap().is_cold);
     }
 }

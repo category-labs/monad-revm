@@ -29,6 +29,10 @@ pub mod instructions;
 pub mod journal;
 /// MIP-3 linear memory costs with a feature-gated 8 MiB pooled limit.
 pub mod memory;
+/// MIP-8 page-based storage access tracking and gas accounting.
+pub mod page;
+/// MIP-8 storage opcode overrides.
+pub mod page_opcode;
 /// Monad precompiles with custom gas pricing.
 pub mod precompiles;
 /// Monad reserve-balance precompile (0x1001).

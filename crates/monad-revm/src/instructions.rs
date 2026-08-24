@@ -1,4 +1,5 @@
-use crate::MonadHardfork;
+use crate::{api::exec::MonadContextTr, MonadHardfork};
+use alloc::vec::Vec;
 use revm::{
     context_interface::cfg::{GasId, GasParams},
     handler::instructions::{EthInstructions, InstructionProvider},
@@ -10,8 +11,36 @@ use revm::{
     primitives::hardfork::SpecId,
 };
 
-/// Type alias for Monad instructions.
-pub type MonadInstructions<CTX> = EthInstructions<EthInterpreter, CTX>;
+/// Monad instruction table with its full Monad hardfork identity.
+#[derive(Debug)]
+pub struct MonadInstructions<CTX: ?Sized> {
+    spec: MonadHardfork,
+    spec_stack: Vec<MonadHardfork>,
+    inner: EthInstructions<EthInterpreter, CTX>,
+}
+
+impl<CTX: Host + ?Sized> Clone for MonadInstructions<CTX> {
+    fn clone(&self) -> Self {
+        Self { spec: self.spec, spec_stack: self.spec_stack.clone(), inner: self.inner.clone() }
+    }
+}
+
+impl<CTX: ?Sized> MonadInstructions<CTX> {
+    /// Returns the active Monad hardfork for this instruction table.
+    pub const fn spec(&self) -> MonadHardfork {
+        self.spec
+    }
+}
+
+impl<CTX: MonadContextTr> MonadInstructions<CTX> {
+    fn replace_spec(&mut self, spec: MonadHardfork) {
+        if self.spec != spec {
+            let spec_stack = core::mem::take(&mut self.spec_stack);
+            *self = monad_instructions(spec);
+            self.spec_stack = spec_stack;
+        }
+    }
+}
 
 /// Instruction provider that follows Monad hardfork changes between frames.
 #[auto_impl::auto_impl(&mut, Box)]
@@ -19,15 +48,18 @@ pub trait MonadInstructionProvider: InstructionProvider {
     /// Selects the instructions for a Monad hardfork.
     fn set_spec(&mut self, spec: MonadHardfork);
 
-    /// Selects the instructions for a frame's underlying Ethereum hardfork.
-    fn set_frame_spec(&mut self, spec: SpecId);
+    /// Selects a hardfork for a new frame and retains the parent hardfork.
+    fn enter_frame(&mut self, spec: MonadHardfork);
+
+    /// Restores the parent hardfork after a frame returns.
+    fn return_from_frame(&mut self, parent_spec: Option<SpecId>) -> Option<MonadHardfork>;
 }
 
-/// Maps a frame's Ethereum runtime spec to its Monad instruction and precompile behavior.
-///
-/// MonadNine and MonadNext currently share Osaka behavior, so an Osaka frame restores the
-/// MonadNine provider configuration.
-pub(crate) const fn monad_frame_spec(spec: SpecId) -> MonadHardfork {
+/// Resolves a frame's Ethereum runtime spec without discarding the configured Monad hardfork.
+pub(crate) fn monad_frame_spec(spec: SpecId, configured_spec: MonadHardfork) -> MonadHardfork {
+    if spec == configured_spec.into_eth_spec() {
+        return configured_spec;
+    }
     if spec.is_enabled_in(SpecId::OSAKA) {
         MonadHardfork::MonadNine
     } else {
@@ -74,7 +106,7 @@ pub fn monad_gas_params(spec: MonadHardfork) -> GasParams {
 /// For all supported Monad specs, CREATE/CREATE2 use Monad-local handlers so
 /// delegated accounts cannot create contracts. MonadNine+ additionally replaces
 /// memory-expanding opcodes with linear-cost MIP-3 handlers (`words / 2`).
-pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<CTX> {
+pub fn monad_instructions<CTX: MonadContextTr>(spec: MonadHardfork) -> MonadInstructions<CTX> {
     let eth_spec = spec.into_eth_spec();
     let mut instructions =
         EthInstructions::new(instruction_table(), gas_table_spec(eth_spec), eth_spec);
@@ -169,18 +201,51 @@ pub fn monad_instructions<CTX: Host>(spec: MonadHardfork) -> MonadInstructions<C
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert), 0);
     }
 
-    instructions
-}
+    if MonadHardfork::MonadNext.is_enabled_in(spec) {
+        use crate::page_opcode;
 
-impl<CTX: Host> MonadInstructionProvider for MonadInstructions<CTX> {
-    fn set_spec(&mut self, spec: MonadHardfork) {
-        if self.spec != spec.into_eth_spec() {
-            *self = monad_instructions(spec);
-        }
+        instructions.insert_instruction(SSTORE, Instruction::new(page_opcode::sstore), 0);
     }
 
-    fn set_frame_spec(&mut self, spec: SpecId) {
-        self.set_spec(monad_frame_spec(spec));
+    MonadInstructions { spec, spec_stack: Vec::new(), inner: instructions }
+}
+
+impl<CTX: MonadContextTr> InstructionProvider for MonadInstructions<CTX> {
+    type Context = CTX;
+    type InterpreterTypes = EthInterpreter;
+
+    fn instruction_table(
+        &self,
+    ) -> &revm::interpreter::instructions::InstructionTable<Self::InterpreterTypes, Self::Context>
+    {
+        self.inner.instruction_table()
+    }
+
+    fn gas_table(&self) -> &revm::interpreter::instructions::GasTable {
+        self.inner.gas_table()
+    }
+}
+
+impl<CTX: MonadContextTr> MonadInstructionProvider for MonadInstructions<CTX> {
+    fn set_spec(&mut self, spec: MonadHardfork) {
+        self.spec_stack.clear();
+        self.replace_spec(spec);
+    }
+
+    fn enter_frame(&mut self, spec: MonadHardfork) {
+        self.spec_stack.push(self.spec);
+        self.replace_spec(spec);
+    }
+
+    fn return_from_frame(&mut self, parent_spec: Option<SpecId>) -> Option<MonadHardfork> {
+        let previous = self.spec_stack.pop().unwrap_or(self.spec);
+        let Some(parent_spec) = parent_spec else {
+            self.replace_spec(previous);
+            return None;
+        };
+        let restored = monad_frame_spec(parent_spec, previous);
+        self.replace_spec(restored);
+        Some(restored)
     }
 }
 
@@ -304,6 +369,68 @@ mod tests {
             .build_fill();
 
         evm.transact(tx).expect("contract call should execute").result
+    }
+
+    fn storage_reads(second_slot: u8) -> Vec<u8> {
+        vec![
+            opcode::PUSH1,
+            0,
+            opcode::SLOAD,
+            opcode::POP,
+            opcode::PUSH1,
+            second_slot,
+            opcode::SLOAD,
+            opcode::POP,
+            opcode::STOP,
+        ]
+    }
+
+    fn storage_writes(second_slot: u8) -> Vec<u8> {
+        vec![
+            opcode::PUSH1,
+            1,
+            opcode::PUSH1,
+            0,
+            opcode::SSTORE,
+            opcode::PUSH1,
+            1,
+            opcode::PUSH1,
+            second_slot,
+            opcode::SSTORE,
+            opcode::STOP,
+        ]
+    }
+
+    #[test]
+    fn test_mip8_sload_warms_entire_page() {
+        let same_page = run_contract(MonadHardfork::MonadNext, storage_reads(127)).tx_gas_used();
+        let different_page =
+            run_contract(MonadHardfork::MonadNext, storage_reads(128)).tx_gas_used();
+        assert_eq!(different_page - same_page, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
+
+        let legacy_same_page =
+            run_contract(MonadHardfork::MonadNine, storage_reads(127)).tx_gas_used();
+        let legacy_different_page =
+            run_contract(MonadHardfork::MonadNine, storage_reads(128)).tx_gas_used();
+        assert_eq!(legacy_different_page, legacy_same_page);
+    }
+
+    #[test]
+    fn test_mip8_sstore_amortizes_load_and_write_cost_per_page() {
+        let same_page = run_contract(MonadHardfork::MonadNext, storage_writes(1)).tx_gas_used();
+        let different_page =
+            run_contract(MonadHardfork::MonadNext, storage_writes(128)).tx_gas_used();
+        assert_eq!(same_page, 66_012);
+        assert_eq!(
+            different_page - same_page,
+            COLD_SLOAD_COST - WARM_STORAGE_READ_COST + crate::page::PAGE_WRITE_COST
+        );
+
+        let legacy_same_page =
+            run_contract(MonadHardfork::MonadNine, storage_writes(1)).tx_gas_used();
+        let legacy_different_page =
+            run_contract(MonadHardfork::MonadNine, storage_writes(128)).tx_gas_used();
+        assert_eq!(legacy_different_page, legacy_same_page);
     }
 
     fn run_delegated_contract(
@@ -848,6 +975,8 @@ mod tests {
         for (parent_spec, child_spec) in [
             (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
             (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadNext),
+            (MonadHardfork::MonadNext, MonadHardfork::MonadNine),
         ] {
             let base = run_frame_spec_transition(parent_spec, child_spec, 0, 0);
             let child_expanded = run_frame_spec_transition(parent_spec, child_spec, 0x2000, 0);
@@ -871,6 +1000,8 @@ mod tests {
         for (parent_spec, child_spec) in [
             (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
             (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadNext),
+            (MonadHardfork::MonadNext, MonadHardfork::MonadNine),
         ] {
             let base = run_immediate_precompile_transition(parent_spec, child_spec, 0);
             let parent_expanded =
@@ -940,6 +1071,7 @@ mod tests {
             .build_fill();
         let result = evm.inspect_one_tx(second_tx).expect("transaction after error should execute");
         assert!(matches!(result, ExecutionResult::Success { .. }));
+        assert_eq!(evm.0.instruction.spec(), parent_spec);
         assert!(
             selected_specs
                 .borrow()
