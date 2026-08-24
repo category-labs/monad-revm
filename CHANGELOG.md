@@ -2,6 +2,18 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added MIP-8 page-level storage warming and SSTORE gas accounting for `MonadNext`, including
+  call-frame rollback and EIP-2930 access-list behavior.
+
+### Changed
+
+- Preserved the full Monad hardfork identity across nested frames when multiple Monad hardforks
+  map to the same Ethereum runtime spec.
+
 ## [0.6.0] - 2026-08-14
 
 ### Added
@@ -69,6 +81,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Restored the parent frame's Monad behavior after nested calls and immediate precompile results.
 - Reverted preserved reserve-balance tracker mutations when synthetic execution fails.
 
+[Unreleased]: https://github.com/category-labs/monad-revm/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/category-labs/monad-revm/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/category-labs/monad-revm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/category-labs/monad-revm/compare/v0.4.0...v0.5.0
