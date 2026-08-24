@@ -260,8 +260,12 @@ mod tests {
     fn test_tx_gas_limit_cap_is_monad_cap() {
         // Monad uses a 30M tx gas limit, not EIP-7825's 16.7M.
         // This must hold for all specs, including MonadNine which maps to OSAKA.
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let cfg = MonadCfgEnv::new_with_spec(spec);
             assert_eq!(
                 cfg.tx_gas_limit_cap(),
@@ -273,8 +277,12 @@ mod tests {
 
     #[test]
     fn test_amsterdam_gas_rules_are_disabled_for_current_monad_specs() {
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let cfg = MonadCfgEnv::new_with_spec(spec);
             assert!(
                 !cfg.is_amsterdam_eip2780_enabled(),
@@ -299,8 +307,8 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory_limit")]
-    fn test_memory_limit_defaults_to_monad_limit_for_monad_nine_and_next() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+    fn test_memory_limit_defaults_to_monad_limit_for_monad_nine_and_later() {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let cfg = MonadCfgEnv::new_with_spec(spec);
             assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
         }
@@ -308,8 +316,8 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory_limit")]
-    fn test_memory_limit_respects_stricter_override_for_monad_nine_and_next() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+    fn test_memory_limit_respects_stricter_override_for_monad_nine_and_later() {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let mut cfg = MonadCfgEnv::new_with_spec(spec);
             cfg.0.memory_limit = 16_000;
             assert_eq!(cfg.memory_limit(), 16_000);
@@ -318,8 +326,8 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory_limit")]
-    fn test_memory_limit_clamps_larger_override_for_monad_nine_and_next() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+    fn test_memory_limit_clamps_larger_override_for_monad_nine_and_later() {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let mut cfg = MonadCfgEnv::new_with_spec(spec);
             cfg.0.memory_limit = 128 * 1024 * 1024;
             assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
@@ -336,7 +344,7 @@ mod tests {
     #[test]
     #[cfg(feature = "memory_limit")]
     fn test_from_cfg_env_applies_monad_memory_limit_cap() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let mut cfg_env = CfgEnv::new_with_spec(spec);
             cfg_env.memory_limit = 128 * 1024 * 1024;
             let monad_cfg: MonadCfgEnv = cfg_env.into();
@@ -348,7 +356,7 @@ mod tests {
     #[test]
     #[cfg(feature = "memory_limit")]
     fn test_memory_limit_applies_monad_default_for_tuple_constructor() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let cfg = MonadCfgEnv(CfgEnv::new_with_spec(spec));
             assert_eq!(cfg.memory_limit(), MONAD_MEMORY_LIMIT);
         }
@@ -357,7 +365,7 @@ mod tests {
     #[test]
     #[cfg(feature = "memory_limit")]
     fn test_from_cfg_env_respects_explicit_memory_limit_override() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let mut cfg_env = CfgEnv::new_with_spec(spec);
             cfg_env.memory_limit = 16_000;
 

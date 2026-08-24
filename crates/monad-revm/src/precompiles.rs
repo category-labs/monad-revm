@@ -279,11 +279,13 @@ impl MonadPrecompiles {
 fn monad_precompiles(spec: MonadHardfork) -> &'static Precompiles {
     static MONAD_EIGHT: OnceLock<Precompiles> = OnceLock::new();
     static MONAD_NINE: OnceLock<Precompiles> = OnceLock::new();
+    static MONAD_TEN: OnceLock<Precompiles> = OnceLock::new();
     static MONAD_NEXT: OnceLock<Precompiles> = OnceLock::new();
 
     let precompiles = match spec {
         MonadHardfork::MonadEight => &MONAD_EIGHT,
         MonadHardfork::MonadNine => &MONAD_NINE,
+        MonadHardfork::MonadTen => &MONAD_TEN,
         MonadHardfork::MonadNext => &MONAD_NEXT,
     };
     precompiles.get_or_init(|| {
@@ -404,9 +406,11 @@ mod tests {
     fn test_monad_precompile_maps_are_reused_across_transitions() {
         let eight = MonadPrecompiles::new_with_spec(MonadHardfork::MonadEight).precompiles();
         let nine = MonadPrecompiles::new_with_spec(MonadHardfork::MonadNine).precompiles();
+        let ten = MonadPrecompiles::new_with_spec(MonadHardfork::MonadTen).precompiles();
         let next = MonadPrecompiles::new_with_spec(MonadHardfork::MonadNext).precompiles();
         assert!(!ptr::eq(eight, nine));
-        assert!(!ptr::eq(nine, next));
+        assert!(!ptr::eq(nine, ten));
+        assert!(!ptr::eq(ten, next));
 
         let mut provider = MonadPrecompiles::new_with_spec(MonadHardfork::MonadEight);
         for _ in 0..64 {

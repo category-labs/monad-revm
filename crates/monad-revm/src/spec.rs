@@ -19,8 +19,10 @@ pub enum MonadHardfork {
     /// MIP-3, MIP-4, MIP-5
     #[default]
     MonadNine = 101,
+    /// MIP-8 page-ified storage state.
+    MonadTen = 102,
     /// Next development spec
-    MonadNext = 102,
+    MonadNext = 103,
 }
 
 impl MonadHardfork {
@@ -36,7 +38,7 @@ impl MonadHardfork {
     pub const fn into_eth_spec(self) -> SpecId {
         match self {
             Self::MonadEight => SpecId::PRAGUE,
-            Self::MonadNine | Self::MonadNext => SpecId::OSAKA,
+            Self::MonadNine | Self::MonadTen | Self::MonadNext => SpecId::OSAKA,
         }
     }
 
@@ -62,7 +64,7 @@ impl MonadHardfork {
         match self {
             Self::MonadEight => Some(1_763_649_000),
             Self::MonadNine => Some(1_773_930_600),
-            Self::MonadNext => None,
+            Self::MonadTen | Self::MonadNext => None,
         }
     }
 
@@ -71,7 +73,7 @@ impl MonadHardfork {
         match self {
             Self::MonadEight => Some(1_763_562_600),
             Self::MonadNine => Some(1_773_153_000),
-            Self::MonadNext => None,
+            Self::MonadTen | Self::MonadNext => None,
         }
     }
 
@@ -106,6 +108,7 @@ impl FromStr for MonadHardfork {
         match s {
             s if s.eq_ignore_ascii_case(name::MONAD_EIGHT) => Ok(Self::MonadEight),
             s if s.eq_ignore_ascii_case(name::MONAD_NINE) => Ok(Self::MonadNine),
+            s if s.eq_ignore_ascii_case(name::MONAD_TEN) => Ok(Self::MonadTen),
             s if s.eq_ignore_ascii_case(name::MONAD_NEXT) => Ok(Self::MonadNext),
             _ => Err(UnknownHardfork),
         }
@@ -117,6 +120,7 @@ impl From<MonadHardfork> for &'static str {
         match spec_id {
             MonadHardfork::MonadEight => name::MONAD_EIGHT,
             MonadHardfork::MonadNine => name::MONAD_NINE,
+            MonadHardfork::MonadTen => name::MONAD_TEN,
             MonadHardfork::MonadNext => name::MONAD_NEXT,
         }
     }
@@ -135,6 +139,8 @@ pub mod name {
     pub const MONAD_EIGHT: &str = "MonadEight";
     /// MIP-3, MIP-4 and MIP-5 spec name.
     pub const MONAD_NINE: &str = "MonadNine";
+    /// MIP-8 spec name.
+    pub const MONAD_TEN: &str = "MonadTen";
     /// Development spec name.
     pub const MONAD_NEXT: &str = "MonadNext";
 }
@@ -160,6 +166,7 @@ mod tests {
     fn test_monad_hardfork_into_eth_spec() {
         assert_eq!(MonadHardfork::MonadEight.into_eth_spec(), SpecId::PRAGUE);
         assert_eq!(MonadHardfork::MonadNine.into_eth_spec(), SpecId::OSAKA);
+        assert_eq!(MonadHardfork::MonadTen.into_eth_spec(), SpecId::OSAKA);
         assert_eq!(MonadHardfork::MonadNext.into_eth_spec(), SpecId::OSAKA);
     }
 
@@ -169,6 +176,8 @@ mod tests {
         assert_eq!("monadeight".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadEight);
         assert_eq!("MonadNine".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNine);
         assert_eq!("monadnine".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNine);
+        assert_eq!("MonadTen".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadTen);
+        assert_eq!("monadten".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadTen);
         assert_eq!("MonadNext".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNext);
         assert_eq!("monadnext".parse::<MonadHardfork>().unwrap(), MonadHardfork::MonadNext);
     }
@@ -190,6 +199,7 @@ mod tests {
     fn test_monad_hardfork_display() {
         assert_eq!(MonadHardfork::MonadEight.to_string(), "MonadEight");
         assert_eq!(MonadHardfork::MonadNine.to_string(), "MonadNine");
+        assert_eq!(MonadHardfork::MonadTen.to_string(), "MonadTen");
         assert_eq!(MonadHardfork::MonadNext.to_string(), "MonadNext");
     }
 
@@ -198,24 +208,34 @@ mod tests {
         // MonadEight is enabled in every spec
         assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadEight));
         assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadTen));
         assert!(MonadHardfork::MonadEight.is_enabled_in(MonadHardfork::MonadNext));
 
         // MonadNine is NOT enabled in MonadEight
         assert!(!MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadEight));
-        // MonadNine IS enabled in MonadNine and MonadNext
+        // MonadNine IS enabled in MonadNine and later specs
         assert!(MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadTen));
         assert!(MonadHardfork::MonadNine.is_enabled_in(MonadHardfork::MonadNext));
 
-        // MonadNext is only enabled in MonadNext
+        // MonadTen is only enabled in MonadTen and later specs
+        assert!(!MonadHardfork::MonadTen.is_enabled_in(MonadHardfork::MonadEight));
+        assert!(!MonadHardfork::MonadTen.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(MonadHardfork::MonadTen.is_enabled_in(MonadHardfork::MonadTen));
+        assert!(MonadHardfork::MonadTen.is_enabled_in(MonadHardfork::MonadNext));
+
+        // MonadNext is only enabled in MonadNext.
         assert!(!MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadEight));
         assert!(!MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadNine));
+        assert!(!MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadTen));
         assert!(MonadHardfork::MonadNext.is_enabled_in(MonadHardfork::MonadNext));
     }
 
     #[test]
     fn test_monad_hardfork_ordering() {
         assert!(MonadHardfork::MonadEight < MonadHardfork::MonadNine);
-        assert!(MonadHardfork::MonadNine < MonadHardfork::MonadNext);
+        assert!(MonadHardfork::MonadNine < MonadHardfork::MonadTen);
+        assert!(MonadHardfork::MonadTen < MonadHardfork::MonadNext);
     }
 
     #[test]
@@ -224,16 +244,20 @@ mod tests {
         assert_eq!(spec_id, SpecId::PRAGUE);
         let spec_id: SpecId = MonadHardfork::MonadNine.into();
         assert_eq!(spec_id, SpecId::OSAKA);
+        let spec_id: SpecId = MonadHardfork::MonadTen.into();
+        assert_eq!(spec_id, SpecId::OSAKA);
     }
 
     #[test]
     fn test_monad_hardfork_activation_timestamps() {
         assert_eq!(MonadHardfork::MonadEight.mainnet_activation_timestamp(), Some(1_763_649_000));
         assert_eq!(MonadHardfork::MonadNine.mainnet_activation_timestamp(), Some(1_773_930_600));
+        assert_eq!(MonadHardfork::MonadTen.mainnet_activation_timestamp(), None);
         assert_eq!(MonadHardfork::MonadNext.mainnet_activation_timestamp(), None);
 
         assert_eq!(MonadHardfork::MonadEight.testnet_activation_timestamp(), Some(1_763_562_600));
         assert_eq!(MonadHardfork::MonadNine.testnet_activation_timestamp(), Some(1_773_153_000));
+        assert_eq!(MonadHardfork::MonadTen.testnet_activation_timestamp(), None);
         assert_eq!(MonadHardfork::MonadNext.testnet_activation_timestamp(), None);
     }
 

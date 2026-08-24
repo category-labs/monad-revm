@@ -92,7 +92,7 @@ impl<DB: Database> MonadJournal<DB> {
 
     #[inline]
     const fn page_access_enabled(&self) -> bool {
-        MonadHardfork::MonadNext.is_enabled_in(self.monad_spec)
+        MonadHardfork::MonadTen.is_enabled_in(self.monad_spec)
     }
 
     #[inline]
@@ -610,9 +610,9 @@ mod tests {
     }
 
     #[test]
-    fn same_page_sload_is_warm_in_monad_next() {
+    fn same_page_sload_is_warm_in_monad_ten() {
         let address = address!("1234567890123456789012345678901234567890");
-        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut journal = journal_with_account(MonadHardfork::MonadTen, address);
 
         let first = journal.sload(address, U256::ZERO).unwrap();
         let second = journal.sload(address, U256::from(127)).unwrap();
@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn same_page_sload_uses_slot_warmth_before_monad_next() {
+    fn same_page_sload_uses_slot_warmth_before_monad_ten() {
         let address = address!("1234567890123456789012345678901234567890");
         let mut journal = journal_with_account(MonadHardfork::MonadNine, address);
 
@@ -634,9 +634,9 @@ mod tests {
     }
 
     #[test]
-    fn different_page_sload_remains_cold_in_monad_next() {
+    fn different_page_sload_remains_cold_in_monad_ten() {
         let address = address!("1234567890123456789012345678901234567890");
-        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut journal = journal_with_account(MonadHardfork::MonadTen, address);
 
         let first = journal.sload(address, U256::ZERO).unwrap();
         let second = journal.sload(address, U256::from(128)).unwrap();
@@ -646,9 +646,9 @@ mod tests {
     }
 
     #[test]
-    fn access_list_warms_entire_page_in_monad_next() {
+    fn access_list_warms_entire_page_in_monad_ten() {
         let address = address!("1234567890123456789012345678901234567890");
-        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut journal = journal_with_account(MonadHardfork::MonadTen, address);
         let mut access_list = AddressMap::default();
         access_list.insert(address, HashSet::from_iter([U256::ZERO]));
 
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn checkpoint_revert_restores_page_warmth() {
         let address = address!("1234567890123456789012345678901234567890");
-        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut journal = journal_with_account(MonadHardfork::MonadTen, address);
         let checkpoint = journal.checkpoint();
         assert!(journal.sload(address, U256::ZERO).unwrap().is_cold);
 
@@ -672,10 +672,19 @@ mod tests {
     #[test]
     fn transaction_boundary_clears_page_warmth() {
         let address = address!("1234567890123456789012345678901234567890");
-        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+        let mut journal = journal_with_account(MonadHardfork::MonadTen, address);
         assert!(journal.sload(address, U256::ZERO).unwrap().is_cold);
         journal.commit_tx();
 
         assert!(journal.sload(address, U256::from(1)).unwrap().is_cold);
+    }
+
+    #[test]
+    fn monad_next_inherits_page_warmth_from_monad_ten() {
+        let address = address!("1234567890123456789012345678901234567890");
+        let mut journal = journal_with_account(MonadHardfork::MonadNext, address);
+
+        assert!(journal.sload(address, U256::ZERO).unwrap().is_cold);
+        assert!(!journal.sload(address, U256::from(127)).unwrap().is_cold);
     }
 }

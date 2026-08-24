@@ -789,8 +789,12 @@ mod tests {
     #[test]
     fn test_same_transaction_delegated_staking_call_reverts() {
         let input = Bytes::copy_from_slice(&getEpochCall::SELECTOR);
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let result = run_same_transaction_delegated_call(spec, STAKING_ADDRESS, input.clone());
             let authority = result
                 .state
@@ -812,7 +816,7 @@ mod tests {
     #[test]
     fn test_same_transaction_delegated_reserve_balance_call_reverts() {
         let input = Bytes::copy_from_slice(&DIPPED_INTO_RESERVE_SELECTOR);
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let result =
                 run_same_transaction_delegated_call(spec, RESERVE_BALANCE_ADDRESS, input.clone());
             let authority = result

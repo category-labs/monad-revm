@@ -201,7 +201,7 @@ pub fn monad_instructions<CTX: MonadContextTr>(spec: MonadHardfork) -> MonadInst
         instructions.insert_instruction(REVERT, Instruction::new(opcodes::revert), 0);
     }
 
-    if MonadHardfork::MonadNext.is_enabled_in(spec) {
+    if MonadHardfork::MonadTen.is_enabled_in(spec) {
         use crate::page_opcode;
 
         instructions.insert_instruction(SSTORE, Instruction::new(page_opcode::sstore), 0);
@@ -403,10 +403,11 @@ mod tests {
 
     #[test]
     fn test_mip8_sload_warms_entire_page() {
-        let same_page = run_contract(MonadHardfork::MonadNext, storage_reads(127)).tx_gas_used();
-        let different_page =
-            run_contract(MonadHardfork::MonadNext, storage_reads(128)).tx_gas_used();
-        assert_eq!(different_page - same_page, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
+        for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
+            let same_page = run_contract(spec, storage_reads(127)).tx_gas_used();
+            let different_page = run_contract(spec, storage_reads(128)).tx_gas_used();
+            assert_eq!(different_page - same_page, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
+        }
 
         let legacy_same_page =
             run_contract(MonadHardfork::MonadNine, storage_reads(127)).tx_gas_used();
@@ -417,14 +418,15 @@ mod tests {
 
     #[test]
     fn test_mip8_sstore_amortizes_load_and_write_cost_per_page() {
-        let same_page = run_contract(MonadHardfork::MonadNext, storage_writes(1)).tx_gas_used();
-        let different_page =
-            run_contract(MonadHardfork::MonadNext, storage_writes(128)).tx_gas_used();
-        assert_eq!(same_page, 66_012);
-        assert_eq!(
-            different_page - same_page,
-            COLD_SLOAD_COST - WARM_STORAGE_READ_COST + crate::page::PAGE_WRITE_COST
-        );
+        for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
+            let same_page = run_contract(spec, storage_writes(1)).tx_gas_used();
+            let different_page = run_contract(spec, storage_writes(128)).tx_gas_used();
+            assert_eq!(same_page, 66_012);
+            assert_eq!(
+                different_page - same_page,
+                COLD_SLOAD_COST - WARM_STORAGE_READ_COST + crate::page::PAGE_WRITE_COST
+            );
+        }
 
         let legacy_same_page =
             run_contract(MonadHardfork::MonadNine, storage_writes(1)).tx_gas_used();
@@ -975,6 +977,10 @@ mod tests {
         for (parent_spec, child_spec) in [
             (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
             (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadTen),
+            (MonadHardfork::MonadTen, MonadHardfork::MonadNine),
+            (MonadHardfork::MonadTen, MonadHardfork::MonadNext),
+            (MonadHardfork::MonadNext, MonadHardfork::MonadTen),
             (MonadHardfork::MonadNine, MonadHardfork::MonadNext),
             (MonadHardfork::MonadNext, MonadHardfork::MonadNine),
         ] {
@@ -1000,6 +1006,10 @@ mod tests {
         for (parent_spec, child_spec) in [
             (MonadHardfork::MonadEight, MonadHardfork::MonadNine),
             (MonadHardfork::MonadNine, MonadHardfork::MonadEight),
+            (MonadHardfork::MonadNine, MonadHardfork::MonadTen),
+            (MonadHardfork::MonadTen, MonadHardfork::MonadNine),
+            (MonadHardfork::MonadTen, MonadHardfork::MonadNext),
+            (MonadHardfork::MonadNext, MonadHardfork::MonadTen),
             (MonadHardfork::MonadNine, MonadHardfork::MonadNext),
             (MonadHardfork::MonadNext, MonadHardfork::MonadNine),
         ] {
@@ -1164,8 +1174,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extended_stack_opcode_bytes_are_unavailable_on_monad_nine_and_next() {
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+    fn test_extended_stack_opcode_bytes_are_unavailable_on_monad_nine_and_later() {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             for opcode in [DUPN_OPCODE, SWAPN_OPCODE, EXCHANGE_OPCODE] {
                 let result = run_contract(spec, vec![opcode]);
                 assert!(
@@ -1202,7 +1212,7 @@ mod tests {
             opcode::RETURN,
         ];
 
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let result = run_contract(spec, contract.clone());
             let output = result.output().expect("jump target should execute successfully");
             assert_eq!(
@@ -1218,8 +1228,12 @@ mod tests {
         let delegated_address = Address::from([0x33; 20]);
         let delegated_code = vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE];
 
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -1243,8 +1257,12 @@ mod tests {
         let delegated_code =
             vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::CREATE2];
 
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -1289,8 +1307,12 @@ mod tests {
             opcode::CREATE2,
         ]));
 
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let delegated_result = run_delegated_contract(
                 spec,
                 Bytecode::new_eip7702(delegated_address),
@@ -1324,8 +1346,12 @@ mod tests {
     fn test_top_level_delegated_staking_precompile_call_reverts() {
         let input = Bytes::from(getEpochCall::SELECTOR.to_vec());
 
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let result = run_contract_with_input_and_accounts(
                 spec,
                 Bytecode::new_eip7702(STAKING_ADDRESS),
@@ -1345,8 +1371,12 @@ mod tests {
         let caller_code =
             call_returns_success_flag_contract(delegated_target, getEpochCall::SELECTOR);
 
-        for spec in [MonadHardfork::MonadEight, MonadHardfork::MonadNine, MonadHardfork::MonadNext]
-        {
+        for spec in [
+            MonadHardfork::MonadEight,
+            MonadHardfork::MonadNine,
+            MonadHardfork::MonadTen,
+            MonadHardfork::MonadNext,
+        ] {
             let result = run_contract_with_input_and_accounts(
                 spec,
                 Bytecode::new_raw(Bytes::from(caller_code.clone())),
@@ -1366,7 +1396,7 @@ mod tests {
     fn test_top_level_delegated_reserve_balance_precompile_call_reverts() {
         let input = Bytes::from(dippedIntoReserveCall::SELECTOR.to_vec());
 
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let result = run_contract_with_input_and_accounts(
                 spec,
                 Bytecode::new_eip7702(RESERVE_BALANCE_ADDRESS),
@@ -1386,7 +1416,7 @@ mod tests {
         let caller_code =
             call_returns_success_flag_contract(delegated_target, dippedIntoReserveCall::SELECTOR);
 
-        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadNext] {
+        for spec in [MonadHardfork::MonadNine, MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
             let result = run_contract_with_input_and_accounts(
                 spec,
                 Bytecode::new_raw(Bytes::from(caller_code.clone())),

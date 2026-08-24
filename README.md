@@ -4,23 +4,25 @@
 [![Documentation](https://docs.rs/monad-revm/badge.svg)](https://docs.rs/monad-revm)
 [![License](https://img.shields.io/crates/l/monad-revm.svg)](LICENSE)
 
-`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution semantics: gas model changes, repriced precompiles, MIP-3 memory accounting, Monad staking, and the Monad reserve-balance precompile.
+`monad-revm` extends [revm](https://github.com/bluealloy/revm) with Monad-specific execution
+semantics: gas model changes, repriced precompiles, MIP-3 memory accounting, MIP-8 page-ified
+storage accounting, Monad staking, and the Monad reserve-balance precompile.
 
 ## EVM Compatibility
 
 | Component | Version |
 |-----------|---------|
 | **revm** | v42.0.1 |
-| **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadNext` |
-| **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine` and `MonadNext` |
+| **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadTen`, `MonadNext` |
+| **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine`, `MonadTen`, and `MonadNext` |
 | **Default Monad spec** | `MonadNine` |
 
 ### Hardfork schedule
 
-| Network | Chain ID | `MonadEight` | `MonadNine` |
-|---------|----------|--------------|-------------|
-| Mainnet | `143` | 2025-11-20 14:30 UTC | 2026-03-19 14:30 UTC |
-| Testnet | `10143` | 2025-11-19 14:30 UTC | 2026-03-10 14:30 UTC |
+| Network | Chain ID | `MonadEight` | `MonadNine` | `MonadTen` | `MonadNext` |
+|---------|----------|--------------|-------------|------------|-------------|
+| Mainnet | `143` | 2025-11-20 14:30 UTC | 2026-03-19 14:30 UTC | Unscheduled | Unscheduled |
+| Testnet | `10143` | 2025-11-19 14:30 UTC | 2026-03-10 14:30 UTC | Unscheduled | Unscheduled |
 
 Use `MonadHardfork::from_chain_and_timestamp(chain_id, timestamp)` to resolve a known network.
 Timestamps before `MonadNine` resolve to `MonadEight`; unknown chain IDs return `None`.
@@ -73,8 +75,15 @@ in force; a higher configured value is retained so a transition back to `MonadEi
 `MonadEight` uses REVM's configured limit and quadratic memory pricing.
 
 Instruction tables, available and warm precompiles, and the effective memory limit are selected
-for every frame. Nested calls that cross the `MonadEight`/`MonadNine` boundary restore the parent
-frame's behavior on success, revert, error, and immediate precompile completion.
+for every frame. Nested calls that cross Monad hardfork boundaries restore the parent frame's
+behavior on success, revert, error, and immediate precompile completion.
+
+### MIP-8 page-ified storage
+
+`MonadTen` introduces MIP-8 page-level storage warming and gas accounting. Storage pages contain
+128 consecutive words. Loading any word warms the page, and the first write plus net state growth
+are charged per page. `MonadNine` retains slot-level storage accounting; later hardforks inherit
+the `MonadTen` behavior.
 
 ## Staking Precompile (`0x1000`)
 
