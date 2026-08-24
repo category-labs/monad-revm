@@ -74,7 +74,8 @@ impl MonadHardfork {
         match self {
             Self::MonadEight => Some(1_763_562_600),
             Self::MonadNine => Some(1_773_153_000),
-            Self::MonadTen | Self::MonadNext => None,
+            Self::MonadTen => Some(1_786_545_000),
+            Self::MonadNext => None,
         }
     }
 
@@ -87,7 +88,11 @@ impl MonadHardfork {
     }
 
     const fn from_testnet_timestamp(timestamp: u64) -> Self {
-        Self::from_timestamp(timestamp, 1_773_153_000)
+        if timestamp >= 1_786_545_000 {
+            Self::MonadTen
+        } else {
+            Self::from_timestamp(timestamp, 1_773_153_000)
+        }
     }
 
     const fn from_timestamp(timestamp: u64, monad_nine_timestamp: u64) -> Self {
@@ -262,7 +267,7 @@ mod tests {
 
         assert_eq!(MonadHardfork::MonadEight.testnet_activation_timestamp(), Some(1_763_562_600));
         assert_eq!(MonadHardfork::MonadNine.testnet_activation_timestamp(), Some(1_773_153_000));
-        assert_eq!(MonadHardfork::MonadTen.testnet_activation_timestamp(), None);
+        assert_eq!(MonadHardfork::MonadTen.testnet_activation_timestamp(), Some(1_786_545_000));
         assert_eq!(MonadHardfork::MonadNext.testnet_activation_timestamp(), None);
     }
 
@@ -295,6 +300,14 @@ mod tests {
         assert_eq!(
             MonadHardfork::from_chain_and_timestamp(MONAD_TESTNET_CHAIN_ID, 1_773_153_000),
             Some(MonadHardfork::MonadNine)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_TESTNET_CHAIN_ID, 1_786_544_999),
+            Some(MonadHardfork::MonadNine)
+        );
+        assert_eq!(
+            MonadHardfork::from_chain_and_timestamp(MONAD_TESTNET_CHAIN_ID, 1_786_545_000),
+            Some(MonadHardfork::MonadTen)
         );
         assert_eq!(MonadHardfork::from_chain_and_timestamp(1, 1_773_153_000), None);
     }
