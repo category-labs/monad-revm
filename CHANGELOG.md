@@ -12,6 +12,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Changed
 
+- Changed the default Monad hardfork from `MonadNine` to `MonadTen`; chain-aware execution still
+  resolves the active hardfork from the configured network timestamp.
 - Moved `MonadNext` after `MonadTen` in hardfork ordering; both remain unscheduled and use Osaka
   as their Ethereum foundation.
 - Preserved the full Monad hardfork identity across nested frames when multiple Monad hardforks

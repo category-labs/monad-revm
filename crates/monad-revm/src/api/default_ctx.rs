@@ -17,14 +17,14 @@ pub type MonadContext<DB> =
 
 /// Trait for creating a default Monad context.
 pub trait DefaultMonad {
-    /// Creates a MonadNine context with default settings and an empty database.
+    /// Creates a MonadTen context with default settings and an empty database.
     ///
     /// This does not resolve the active hardfork from a chain ID and timestamp. Historical
     /// execution should select a spec explicitly and populate [`MonadChainContext`].
     fn monad() -> MonadContext<EmptyDB>;
 }
 
-/// Creates a MonadNine context with the given database backend.
+/// Creates a MonadTen context with the given database backend.
 ///
 /// The context applies Monad gas parameters, a 30 million transaction gas cap, and a default
 /// 10 MON reserve threshold. Its chain metadata is empty; canonical replay must populate it.
@@ -51,12 +51,14 @@ impl DefaultMonad for MonadContext<EmptyDB> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::api::builder::MonadBuilder;
-    use revm::{inspector::NoOpInspector, ExecuteEvm};
+    use crate::{api::builder::MonadBuilder, MonadJournalTr};
+    use revm::{context::Cfg, inspector::NoOpInspector, ExecuteEvm};
 
     #[test]
     fn default_run_monad() {
         let ctx = Context::monad();
+        assert_eq!(ctx.cfg.spec(), MonadHardfork::MonadTen);
+        assert_eq!(ctx.journaled_state.monad_spec(), MonadHardfork::MonadTen);
         let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
         let tx = TxEnv::default();
         let _ = evm.transact(tx);

@@ -17,9 +17,9 @@ pub enum MonadHardfork {
     /// Monad launch hardfork (based on Prague).
     MonadEight = 100,
     /// MIP-3, MIP-4, MIP-5
-    #[default]
     MonadNine = 101,
     /// MIP-8 page-ified storage state.
+    #[default]
     MonadTen = 102,
     /// Next development spec
     MonadNext = 103,
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_monad_hardfork_default() {
-        assert_eq!(MonadHardfork::default(), MonadHardfork::MonadNine);
+        assert_eq!(MonadHardfork::default(), MonadHardfork::MonadTen);
     }
 
     #[test]
