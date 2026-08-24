@@ -6,11 +6,13 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Added
 
-- Added MIP-8 page-level storage warming and SSTORE gas accounting for `MonadNext`, including
-  call-frame rollback and EIP-2930 access-list behavior.
+- Added the `MonadTen` hardfork with MIP-8 page-level storage warming and SSTORE gas accounting,
+  including call-frame rollback and EIP-2930 access-list behavior.
 
 ### Changed
 
+- Moved `MonadNext` after `MonadTen` in hardfork ordering; both remain unscheduled and use Osaka
+  as their Ethereum foundation.
 - Preserved the full Monad hardfork identity across nested frames when multiple Monad hardforks
   map to the same Ethereum runtime spec.
 
