@@ -2,7 +2,7 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-08-25
 
 ### Added
 
@@ -87,7 +87,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Restored the parent frame's Monad behavior after nested calls and immediate precompile results.
 - Reverted preserved reserve-balance tracker mutations when synthetic execution fails.
 
-[Unreleased]: https://github.com/category-labs/monad-revm/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/category-labs/monad-revm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/category-labs/monad-revm/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/category-labs/monad-revm/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/category-labs/monad-revm/compare/v0.4.0...v0.5.0
