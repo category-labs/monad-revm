@@ -401,6 +401,33 @@ mod tests {
         ]
     }
 
+    fn reverted_page_growth_then_store(callee: Address) -> Vec<u8> {
+        let mut code =
+            vec![opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH0, opcode::PUSH20];
+        code.extend_from_slice(callee.as_slice());
+        code.extend_from_slice(&[
+            opcode::GAS,
+            opcode::DELEGATECALL,
+            opcode::POP,
+            opcode::GAS,
+            opcode::PUSH1,
+            1,
+            opcode::PUSH1,
+            2,
+            opcode::SSTORE,
+            opcode::GAS,
+            opcode::SWAP1,
+            opcode::SUB,
+            opcode::PUSH0,
+            opcode::MSTORE,
+            opcode::PUSH1,
+            0x20,
+            opcode::PUSH0,
+            opcode::RETURN,
+        ]);
+        code
+    }
+
     #[test]
     fn test_mip8_sload_warms_entire_page() {
         for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
@@ -433,6 +460,47 @@ mod tests {
         let legacy_different_page =
             run_contract(MonadHardfork::MonadNine, storage_writes(128)).tx_gas_used();
         assert_eq!(legacy_different_page, legacy_same_page);
+    }
+
+    #[test]
+    fn test_mip8_nested_revert_restores_all_page_tracking() {
+        let callee = Address::from([0x33; 20]);
+        let callee_code = Bytecode::new_raw(Bytes::from(vec![
+            opcode::PUSH1,
+            1,
+            opcode::PUSH0,
+            opcode::SSTORE,
+            opcode::PUSH1,
+            1,
+            opcode::PUSH1,
+            1,
+            opcode::SSTORE,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::SSTORE,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::REVERT,
+        ]));
+        let parent_code = Bytecode::new_raw(Bytes::from(reverted_page_growth_then_store(callee)));
+        let expected_sstore_gas =
+            COLD_SLOAD_COST + crate::page::PAGE_WRITE_COST + crate::page::STATE_GROWTH_COST;
+
+        for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
+            let result = run_contract_with_input_and_accounts(
+                spec,
+                parent_code.clone(),
+                Bytes::new(),
+                &[(callee, callee_code.clone())],
+            );
+            let measured = U256::from_be_slice(
+                result.output().expect("parent contract should return measured SSTORE gas"),
+            )
+            .to::<u64>();
+
+            // The two PUSH1 instructions and trailing GAS add eight gas around SSTORE.
+            assert_eq!(measured, expected_sstore_gas + 8, "page state should revert on {spec:?}");
+        }
     }
 
     fn run_delegated_contract(
