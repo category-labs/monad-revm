@@ -12,7 +12,7 @@ storage accounting, Monad staking, and the Monad reserve-balance precompile.
 
 | Component | Version |
 |-----------|---------|
-| **revm** | v42.0.1 |
+| **revm** | v43.0.0 |
 | **Supported Monad specs** | `MonadEight`, `MonadNine`, `MonadTen`, `MonadNext` |
 | **Ethereum foundation** | Prague for `MonadEight`; Osaka for `MonadNine`, `MonadTen`, and `MonadNext` |
 | **Default Monad spec** | `MonadTen` |
@@ -263,16 +263,16 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monad-revm = "0.7.0"
-revm = "42.0.1"
+monad-revm = "0.8.0"
+revm = "43.0.0"
 ```
 
 To pin directly to the matching immutable Git release:
 
 ```toml
 [dependencies]
-monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.7.0" }
-revm = "42.0.1"
+monad-revm = { git = "https://github.com/category-labs/monad-revm", tag = "v0.8.0" }
+revm = "43.0.0"
 ```
 
 ## Usage
@@ -312,7 +312,7 @@ let result = evm.transact(tx).expect("transaction should execute");
 ```
 
 The same program is available as
-[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.7.0/crates/monad-revm/examples/basic.rs).
+[`basic.rs`](https://github.com/category-labs/monad-revm/blob/v0.8.0/crates/monad-revm/examples/basic.rs).
 
 ### With inspector
 
@@ -399,6 +399,9 @@ monad-revm/
 - [Foundry Monad integration](https://github.com/foundry-rs/foundry/pull/15343): Forge, Anvil, Cast, and Chisel support.
 
 ## Release coordination
+
+`monad-revm` 0.8.0 uses `revm` and `revm-interpreter` 43.0.0. Downstream crates must update
+their REVM dependencies together because REVM 42 and 43 types are not interchangeable.
 
 `monad-revm`, `alloy-monad-evm`, and Foundry's Monad integration must move together when porting to a new upstream Foundry/revm/alloy stack. Keep downstream consumers pinned to matching integration refs during a port, then update them to the merged commits or immutable release tags before retiring temporary integration refs.
 

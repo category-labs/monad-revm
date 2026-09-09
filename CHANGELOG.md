@@ -2,6 +2,16 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
+## [0.8.0] - 2026-09-09
+
+### Changed
+
+- Updated the public integration surface from `revm` 42.0.1 and `revm-interpreter` 42.0.0 to
+  version 43.0.0 of both crates. Downstream crates must update their REVM types in lockstep
+  because types from REVM 42 and 43 are not interchangeable.
+- Updated the compatibility table, installation examples, and immutable release references
+  for `monad-revm` 0.8.0.
+
 ## [0.7.0] - 2026-08-25
 
 ### Added
@@ -87,6 +97,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Restored the parent frame's Monad behavior after nested calls and immediate precompile results.
 - Reverted preserved reserve-balance tracker mutations when synthetic execution fails.
 
+[0.8.0]: https://github.com/category-labs/monad-revm/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/category-labs/monad-revm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/category-labs/monad-revm/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/category-labs/monad-revm/compare/v0.5.0...v0.5.1
