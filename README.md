@@ -400,9 +400,6 @@ monad-revm/
 
 ## Release coordination
 
-`monad-revm` 0.8.0 uses `revm` and `revm-interpreter` 43.0.0. Downstream crates must update
-their REVM dependencies together because REVM 42 and 43 types are not interchangeable.
-
 `monad-revm`, `alloy-monad-evm`, and Foundry's Monad integration must move together when porting to a new upstream Foundry/revm/alloy stack. Keep downstream consumers pinned to matching integration refs during a port, then update them to the merged commits or immutable release tags before retiring temporary integration refs.
 
 ## References
