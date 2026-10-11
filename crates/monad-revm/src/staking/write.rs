@@ -1306,6 +1306,9 @@ pub fn handle_compound<S: StakingStorage>(
 
     if !del.rewards.is_zero() {
         let rewards = del.rewards;
+        if rewards < DUST_THRESHOLD {
+            return Err(PrecompileHalt::Other("delegation is too small".into()));
+        }
 
         // Clear rewards (solvency already checked in pull_delegator_up_to_date via reward_invariant)
         del.rewards = U256::ZERO;
@@ -2455,5 +2458,48 @@ mod tests {
 
         // calculate_rewards with stake=MAX and acc diff will overflow in mul_div
         assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Compound minimum delegation tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    fn compound_setup(rewards: U256) -> (MockStorage, Address, u64) {
+        let mut storage = MockStorage::default();
+        let caller = Address::new([0xDD; 20]);
+        let val_id = 1u64;
+        storage.slots.insert(
+            validator_key(val_id, validator_offsets::ADDRESS_FLAGS),
+            address_flags_slot(caller, validator_flags::OK),
+        );
+        storage.slots.insert(validator_key(val_id, validator_offsets::UNCLAIMED_REWARDS), rewards);
+        storage.slots.insert(delegator_key(val_id, &caller, delegator_offsets::REWARDS), rewards);
+        storage.set_u64_left(global_slots::EPOCH, 1);
+        (storage, caller, val_id)
+    }
+
+    #[test]
+    fn test_compound_below_min_delegation_reverts() {
+        let (mut storage, caller, val_id) = compound_setup(U256::from(1u64));
+
+        let input = compoundCall { validatorId: val_id }.abi_encode();
+        let result = handle_compound(&mut storage, &input, gas::COMPOUND + 1_000, &caller);
+
+        assert!(result.is_err());
+        assert!(storage.logs.is_empty());
+    }
+
+    #[test]
+    fn test_compound_at_min_delegation_succeeds() {
+        let (mut storage, caller, val_id) = compound_setup(DUST_THRESHOLD);
+
+        let input = compoundCall { validatorId: val_id }.abi_encode();
+        let result = handle_compound(&mut storage, &input, gas::COMPOUND + 1_000, &caller);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            storage.slots.get(&validator_key(val_id, validator_offsets::STAKE)).copied(),
+            Some(DUST_THRESHOLD)
+        );
     }
 }
