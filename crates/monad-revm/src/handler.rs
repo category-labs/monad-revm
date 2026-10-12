@@ -194,10 +194,10 @@ where
             effective_gas_price
         };
 
-        let reward = coinbase_gas_price * gas_limit as u128;
+        let reward = U256::from(coinbase_gas_price) * U256::from(gas_limit);
         let beneficiary = ctx.block().beneficiary();
 
-        ctx.journal_mut().balance_incr(beneficiary, U256::from(reward))?;
+        ctx.journal_mut().balance_incr(beneficiary, reward)?;
 
         Ok(())
     }
@@ -473,6 +473,39 @@ mod tests {
             coinbase_balance, expected_reward,
             "Coinbase should receive gas_limit * gas_price = {expected_reward}, got {coinbase_balance}"
         );
+    }
+
+    #[test]
+    fn test_reward_beneficiary_does_not_overflow_u128() {
+        let caller = Address::from([1u8; 20]);
+        let coinbase = Address::from([2u8; 20]);
+        let gas_limit = 21_000u64;
+        let gas_price = u128::MAX;
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            revm::state::AccountInfo { balance: U256::MAX, ..Default::default() },
+        );
+        db.insert_account_info(coinbase, revm::state::AccountInfo::default());
+
+        let ctx = monad_context_with_db(db);
+        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+        evm.ctx().block.beneficiary = coinbase;
+        evm.ctx().block.basefee = 0;
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .to(Address::from([3u8; 20]))
+            .gas_limit(gas_limit)
+            .gas_price(gas_price)
+            .build_fill();
+
+        let result = evm.transact(tx).expect("Transaction should succeed");
+
+        let coinbase_balance =
+            result.state.get(&coinbase).map(|a| a.info.balance).unwrap_or_default();
+        assert_eq!(coinbase_balance, U256::from(gas_price) * U256::from(gas_limit));
     }
 
     #[test]
