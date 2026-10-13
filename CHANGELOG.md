@@ -16,6 +16,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 - Reject transaction execution that violates reserve balances while retaining fees, sender nonce,
   and EIP-7702 authorizations. Preserved synthetic calls defer enforcement to their enclosing
   transaction.
+- Adjudicate reserve rejection before root inspector end callbacks so traces observe the failed
+  frame and inspectors observe rolled-back execution state.
 
 ### Changed
 

@@ -6,18 +6,23 @@ use monad_revm::{
 };
 use revm::{
     bytecode::opcode,
-    context::TxEnv,
+    context::{ContextError, TxEnv},
     context_interface::{
         either::Either,
-        result::{ExecutionResult, HaltReason, Output, ResultAndState},
+        journaled_state::account::JournaledAccountTr,
+        result::{EVMError, ExecutionResult, HaltReason, Output, ResultAndState},
         transaction::{Authorization, RecoveredAuthority, RecoveredAuthorization},
         JournalTr,
     },
     database::InMemoryDB,
+    handler::FrameResult,
     inspector::NoOpInspector,
-    interpreter::{CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult},
+    interpreter::{
+        CallInputs, CallOutcome, CreateInputs, CreateOutcome, FrameInput, Gas, InstructionResult,
+        Interpreter, InterpreterResult,
+    },
     primitives::{Address, Bytes, TxKind, U256},
-    state::{AccountInfo, Bytecode},
+    state::{AccountInfo, Bytecode, EvmState},
     ExecuteCommitEvm, ExecuteEvm, InspectCommitEvm, InspectEvm, Inspector,
 };
 use rstest::rstest;
@@ -538,21 +543,84 @@ fn creation_nonce_overflow_precedes_reserve_enforcement(#[values(false, true)] i
 
 #[derive(Default)]
 struct FrameOutcomeInspector {
-    result: Option<InstructionResult>,
+    events: Vec<(&'static str, usize)>,
+    roots: Vec<RootOutcome>,
+}
+
+struct RootOutcome {
+    result: InstructionResult,
     logs: usize,
-    depth: usize,
+    gas_remaining: u64,
+    state: EvmState,
+}
+
+impl FrameOutcomeInspector {
+    fn record_end(
+        &mut self,
+        event: &'static str,
+        context: &MonadContext<InMemoryDB>,
+        result: &InterpreterResult,
+    ) {
+        let depth = context.journaled_state.depth();
+        self.events.push((event, depth));
+        if depth == 0 {
+            self.roots.push(RootOutcome {
+                result: result.result,
+                logs: context.journaled_state.logs().len(),
+                gas_remaining: result.gas.remaining(),
+                state: context.journaled_state.state.clone(),
+            });
+        }
+    }
 }
 
 impl Inspector<MonadContext<InMemoryDB>> for FrameOutcomeInspector {
+    fn frame_start(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _input: &mut FrameInput,
+    ) -> Option<FrameResult> {
+        self.events.push(("frame_start", context.journaled_state.depth()));
+        None
+    }
+
+    fn call(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        self.events.push(("call", context.journaled_state.depth()));
+        None
+    }
+
+    fn create(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _inputs: &mut CreateInputs,
+    ) -> Option<CreateOutcome> {
+        self.events.push(("create", context.journaled_state.depth()));
+        None
+    }
+
+    fn initialize_interp(
+        &mut self,
+        _interp: &mut Interpreter,
+        context: &mut MonadContext<InMemoryDB>,
+    ) {
+        self.events.push(("initialize", context.journaled_state.depth()));
+    }
+
+    fn log(&mut self, context: &mut MonadContext<InMemoryDB>, _log: revm::primitives::Log) {
+        self.events.push(("log", context.journaled_state.depth()));
+    }
+
     fn call_end(
         &mut self,
         context: &mut MonadContext<InMemoryDB>,
         _inputs: &CallInputs,
         outcome: &mut CallOutcome,
     ) {
-        self.result = Some(outcome.result.result);
-        self.logs = context.journaled_state.logs().len();
-        self.depth = context.journaled_state.depth();
+        self.record_end("call_end", context, &outcome.result);
     }
 
     fn create_end(
@@ -561,23 +629,396 @@ impl Inspector<MonadContext<InMemoryDB>> for FrameOutcomeInspector {
         _inputs: &CreateInputs,
         outcome: &mut CreateOutcome,
     ) {
-        self.result = Some(outcome.result.result);
-        self.logs = context.journaled_state.logs().len();
-        self.depth = context.journaled_state.depth();
+        self.record_end("create_end", context, &outcome.result);
+    }
+
+    fn frame_end(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _input: &FrameInput,
+        result: &mut FrameResult,
+    ) {
+        self.record_end("frame_end", context, result.interpreter_result());
     }
 }
 
 #[rstest]
-fn frame_callbacks_are_provisional_until_transaction_reserve_adjudication(
+fn root_end_callbacks_observe_reserve_rejection_after_execution_rollback(
     #[values(false, true)] create: bool,
 ) {
     let mut evm = evm(MonadHardfork::MonadTen, true);
-    let tx = tx(create, storage_and_log(), mon(3), &mut evm);
+    let child = vec![opcode::PUSH0, opcode::PUSH0, opcode::LOG0];
+    evm.0.ctx.journaled_state.database.insert_account_info(
+        RECIPIENT,
+        AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(child))),
+    );
+    let mut code = storage_and_log();
+    call(&mut code, RECIPIENT, mon(1));
+    return_code(&mut code);
+    let tx = tx(create, code, mon(3), &mut evm);
     let mut evm = evm.with_inspector(FrameOutcomeInspector::default());
     let out = evm.inspect_tx(tx).unwrap();
     let inspector = &evm.0.inspector;
-    assert!(inspector.result.unwrap().is_ok());
-    assert_eq!(inspector.logs, 1);
-    assert_eq!(inspector.depth, 0);
+    assert_eq!(
+        inspector.events,
+        vec![
+            ("frame_start", 0),
+            (if create { "create" } else { "call" }, 0),
+            ("initialize", 1),
+            ("log", 1),
+            ("frame_start", 1),
+            ("call", 1),
+            ("initialize", 2),
+            ("log", 2),
+            ("call_end", 1),
+            ("frame_end", 1),
+            (if create { "create_end" } else { "call_end" }, 0),
+            ("frame_end", 0),
+        ]
+    );
+    assert_eq!(inspector.roots.len(), 2);
+    for root in &inspector.roots {
+        assert_eq!(root.result, InstructionResult::Revert);
+        assert_eq!(root.logs, 0);
+        assert_eq!(root.gas_remaining, GAS_LIMIT - out.result.gas().total_gas_spent());
+        assert_eq!(root.state[&SENDER].info.balance, mon(12) - U256::from(GAS_LIMIT));
+        assert_eq!(root.state[&SENDER].info.nonce, 1);
+        assert_eq!(root.state[&RECIPIENT].info.balance, U256::ZERO);
+        let target = if create { SENDER.create(0) } else { TARGET };
+        let target = &root.state[&target];
+        assert_eq!(target.info.balance, U256::ZERO);
+        assert!(target.storage.values().all(|slot| slot.present_value() == U256::ZERO));
+        if create {
+            assert_eq!(target.info.nonce, 0);
+            assert!(target.info.code.as_ref().is_none_or(Bytecode::is_empty));
+        }
+    }
     assert_violation(&out, 1, GAS_LIMIT);
+}
+
+#[test]
+fn immediate_call_callbacks_observe_reserve_rejection() {
+    for recipient in [TARGET, Address::with_last_byte(4)] {
+        let mut evm =
+            evm(MonadHardfork::MonadTen, true).with_inspector(FrameOutcomeInspector::default());
+        let tx = TxEnv::builder()
+            .caller(SENDER)
+            .to(recipient)
+            .value(mon(3))
+            .gas_limit(GAS_LIMIT)
+            .gas_price(1)
+            .build_fill();
+        let out = evm.inspect_tx(tx).unwrap();
+        let inspector = &evm.0.inspector;
+        assert_eq!(
+            inspector.events,
+            [("frame_start", 0), ("call", 0), ("call_end", 0), ("frame_end", 0)]
+        );
+        for root in &inspector.roots {
+            assert_eq!(root.result, InstructionResult::Revert);
+            assert_eq!(root.state[&recipient].info.balance, U256::ZERO);
+        }
+        assert_violation(&out, 1, GAS_LIMIT);
+    }
+}
+
+#[test]
+fn root_end_callbacks_retain_authorizations() {
+    let mut evm = evm(MonadHardfork::MonadTen, false);
+    let mut tx = tx(false, storage_and_log(), mon(3), &mut evm);
+    tx.tx_type = 4;
+    tx.authorization_list = vec![authorization(SENDER, 1), authorization(AUTHORITY, 0)];
+    let mut evm = evm.with_inspector(FrameOutcomeInspector::default());
+    let out = evm.inspect_tx(tx).unwrap();
+    for root in &evm.0.inspector.roots {
+        assert_eq!(root.result, InstructionResult::Revert);
+        assert_eq!(root.state[&SENDER].info.nonce, 2);
+        assert_eq!(root.state[&AUTHORITY].info.nonce, 1);
+        for address in [SENDER, AUTHORITY] {
+            assert_eq!(
+                root.state[&address].info.code.as_ref().and_then(Bytecode::eip7702_address),
+                Some(DELEGATE)
+            );
+        }
+    }
+    assert_violation(&out, 2, GAS_LIMIT);
+}
+
+struct OutcomeEditor {
+    generic: bool,
+    success: bool,
+}
+
+impl OutcomeEditor {
+    fn edit(&self, result: &mut InterpreterResult) {
+        assert_eq!(result.result, InstructionResult::Revert);
+        if self.success {
+            result.result = InstructionResult::Return;
+        }
+        result.output = Bytes::from_static(b"inspector output");
+    }
+}
+
+impl Inspector<MonadContext<InMemoryDB>> for OutcomeEditor {
+    fn call_end(
+        &mut self,
+        _context: &mut MonadContext<InMemoryDB>,
+        _inputs: &CallInputs,
+        outcome: &mut CallOutcome,
+    ) {
+        if !self.generic {
+            self.edit(&mut outcome.result);
+        }
+    }
+
+    fn create_end(
+        &mut self,
+        _context: &mut MonadContext<InMemoryDB>,
+        _inputs: &CreateInputs,
+        outcome: &mut CreateOutcome,
+    ) {
+        if !self.generic {
+            self.edit(&mut outcome.result);
+        }
+    }
+
+    fn frame_end(
+        &mut self,
+        _context: &mut MonadContext<InMemoryDB>,
+        _input: &FrameInput,
+        result: &mut FrameResult,
+    ) {
+        if self.generic {
+            self.edit(result.interpreter_result_mut());
+        }
+    }
+}
+
+#[rstest]
+fn inspector_can_override_adjudicated_root_outcomes(
+    #[values(false, true)] create: bool,
+    #[values(false, true)] generic: bool,
+    #[values(false, true)] success: bool,
+) {
+    let mut evm = evm(MonadHardfork::MonadTen, true);
+    let tx = tx(create, storage_and_log(), mon(3), &mut evm);
+    let mut evm =
+        evm.with_inspector((OutcomeEditor { generic, success }, FrameOutcomeInspector::default()));
+    let out = evm.inspect_tx(tx).unwrap();
+    assert_eq!(out.result.is_success(), success);
+    assert_eq!(matches!(out.result, ExecutionResult::Revert { .. }), !success);
+    assert_eq!(out.result.output(), Some(&Bytes::from_static(b"inspector output")));
+    assert_eq!(out.state[&SENDER].info.balance, mon(12) - U256::from(GAS_LIMIT));
+    assert_eq!(out.state[&SENDER].info.nonce, 1);
+    assert!(out.result.logs().is_empty());
+    let target = if create { SENDER.create(0) } else { TARGET };
+    assert_eq!(out.state[&target].info.balance, U256::ZERO);
+    assert!(out.state[&target].storage.values().all(|slot| slot.present_value() == U256::ZERO));
+    assert_eq!(evm.0.inspector.1.roots.len(), 2);
+    assert_eq!(
+        evm.0.inspector.1.roots.last().unwrap().result,
+        if success { InstructionResult::Return } else { InstructionResult::Revert }
+    );
+}
+
+struct ShortCircuitInspector {
+    generic: bool,
+    advance_nonce: bool,
+}
+
+impl ShortCircuitInspector {
+    fn result(
+        &self,
+        context: &mut MonadContext<InMemoryDB>,
+        gas_limit: u64,
+        create: bool,
+    ) -> FrameResult {
+        if create && self.advance_nonce {
+            context.journaled_state.load_account_mut(SENDER).unwrap().bump_nonce();
+        }
+        let recipient = if create { SENDER.create(0) } else { TARGET };
+        assert!(context.journaled_state.transfer(SENDER, recipient, mon(3)).unwrap().is_none());
+        let result = InterpreterResult {
+            result: InstructionResult::Return,
+            output: Bytes::new(),
+            gas: Gas::new(gas_limit),
+        };
+        if create {
+            FrameResult::Create(CreateOutcome::new(result, None))
+        } else {
+            FrameResult::Call(CallOutcome::new(result, 0..0))
+        }
+    }
+}
+
+impl Inspector<MonadContext<InMemoryDB>> for ShortCircuitInspector {
+    fn frame_start(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        input: &mut FrameInput,
+    ) -> Option<FrameResult> {
+        if !self.generic {
+            return None;
+        }
+        Some(match input {
+            FrameInput::Call(inputs) => self.result(context, inputs.gas_limit, false),
+            FrameInput::Create(inputs) => self.result(context, inputs.gas_limit(), true),
+            FrameInput::Empty => unreachable!(),
+        })
+    }
+
+    fn call(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        let FrameResult::Call(outcome) = self.result(context, inputs.gas_limit, false) else {
+            unreachable!()
+        };
+        Some(outcome)
+    }
+
+    fn create(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        inputs: &mut CreateInputs,
+    ) -> Option<CreateOutcome> {
+        let FrameResult::Create(outcome) = self.result(context, inputs.gas_limit(), true) else {
+            unreachable!()
+        };
+        Some(outcome)
+    }
+}
+
+#[rstest]
+fn short_circuit_callbacks_observe_rejection_without_inventing_create_nonce(
+    #[values(false, true)] create: bool,
+    #[values(false, true)] generic: bool,
+    #[values(false, true)] advance_nonce: bool,
+) {
+    let mut evm = evm(MonadHardfork::MonadTen, true);
+    let tx = tx(create, storage_and_log(), mon(3), &mut evm);
+    let inspector =
+        (ShortCircuitInspector { generic, advance_nonce }, FrameOutcomeInspector::default());
+    let mut evm = evm.with_inspector(inspector);
+    let out = evm.inspect_tx(tx).unwrap();
+    let nonce = if create { u64::from(advance_nonce) } else { 1 };
+    assert_violation(&out, nonce, GAS_LIMIT);
+    let inspector = &evm.0.inspector.1;
+    let mut expected = vec![("frame_start", 0)];
+    if !generic {
+        expected.push((if create { "create" } else { "call" }, 0));
+    }
+    expected.extend([(if create { "create_end" } else { "call_end" }, 0), ("frame_end", 0)]);
+    assert_eq!(inspector.events, expected);
+    assert_eq!(inspector.roots.len(), 2);
+    for root in &inspector.roots {
+        assert_eq!(root.result, InstructionResult::Revert);
+        assert_eq!(root.state[&SENDER].info.nonce, nonce);
+        assert_eq!(root.state[&SENDER].info.balance, mon(12) - U256::from(GAS_LIMIT));
+        let recipient = if create { SENDER.create(0) } else { TARGET };
+        assert_eq!(root.state[&recipient].info.balance, U256::ZERO);
+    }
+}
+
+struct PendingErrorInspector;
+
+impl Inspector<MonadContext<InMemoryDB>> for PendingErrorInspector {
+    fn frame_start(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        input: &mut FrameInput,
+    ) -> Option<FrameResult> {
+        let (create, gas_limit) = match input {
+            FrameInput::Call(inputs) => (false, inputs.gas_limit),
+            FrameInput::Create(inputs) => (true, inputs.gas_limit()),
+            FrameInput::Empty => unreachable!(),
+        };
+        let mut result = ShortCircuitInspector { generic: true, advance_nonce: create }
+            .result(context, gas_limit, create);
+        assert!(context.journaled_state.reserve_balance().has_violation());
+        result.interpreter_result_mut().result = InstructionResult::FatalExternalError;
+        context.error = Err(ContextError::Custom("host failure".into()));
+        Some(result)
+    }
+}
+
+struct FatalOutcomeEditor {
+    success: bool,
+}
+
+impl FatalOutcomeEditor {
+    fn edit(&self, context: &MonadContext<InMemoryDB>, result: &mut InterpreterResult) {
+        assert!(context.error.is_err());
+        assert_eq!(result.result, InstructionResult::FatalExternalError);
+        if self.success {
+            result.result = InstructionResult::Return;
+        }
+    }
+}
+
+impl Inspector<MonadContext<InMemoryDB>> for FatalOutcomeEditor {
+    fn call_end(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _inputs: &CallInputs,
+        outcome: &mut CallOutcome,
+    ) {
+        self.edit(context, &mut outcome.result);
+    }
+
+    fn create_end(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _inputs: &CreateInputs,
+        outcome: &mut CreateOutcome,
+    ) {
+        self.edit(context, &mut outcome.result);
+    }
+
+    fn frame_end(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        _input: &FrameInput,
+        _result: &mut FrameResult,
+    ) {
+        assert!(context.error.is_err());
+    }
+}
+
+#[rstest]
+fn pending_host_error_preserves_fatal_callbacks_and_aborts_commit(
+    #[values(false, true)] create: bool,
+    #[values(false, true)] success: bool,
+) {
+    let mut evm = evm(MonadHardfork::MonadTen, true);
+    let tx = tx(create, storage_and_log(), mon(3), &mut evm);
+    let inspector =
+        (PendingErrorInspector, (FrameOutcomeInspector::default(), FatalOutcomeEditor { success }));
+    let mut evm = evm.with_inspector(inspector);
+    assert!(
+        matches!(evm.inspect_tx_commit(tx), Err(EVMError::Custom(message)) if message == "host failure")
+    );
+    let roots = &evm.0.inspector.1 .0.roots;
+    assert_eq!(roots.len(), 2);
+    assert_eq!(roots[0].result, InstructionResult::FatalExternalError);
+    assert_eq!(
+        roots[1].result,
+        if success { InstructionResult::Return } else { InstructionResult::FatalExternalError }
+    );
+    assert_eq!(evm.0.ctx.journaled_state.database.cache.accounts[&SENDER].info.balance, mon(12));
+    assert_eq!(evm.0.ctx.journaled_state.database.cache.accounts[&SENDER].info.nonce, 0);
+    assert!(evm.0.ctx.journaled_state.state.is_empty());
+    assert_eq!(evm.0.ctx.journaled_state.depth(), 0);
+    assert!(!evm.0.ctx.journaled_state.reserve_balance().tracking_enabled());
+
+    let mut evm = evm.with_inspector(NoOpInspector);
+    let tx = TxEnv::builder()
+        .caller(SENDER)
+        .to(RECIPIENT)
+        .value(mon(1))
+        .gas_limit(GAS_LIMIT)
+        .gas_price(1)
+        .build_fill();
+    assert!(evm.inspect_tx_commit(tx).unwrap().is_success());
 }

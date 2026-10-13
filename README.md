@@ -263,15 +263,22 @@ CREATE reserve rejection consumes it, matching the canonical execution behavior.
 Monad's full gas-limit fee charging. Custom `MonadJournalTr` implementations must provide
 `checkpoint_execution`, `commit_execution`, and `revert_execution`, which snapshot execution
 without changing the observable call depth. Their ordinary frame rollback must call
-`ReserveBalanceTracker::before_checkpoint_revert` before restoring state, followed by
-`on_checkpoint_revert` afterward, so an outer frame's reserve violation retains precedence
-over its original execution failure.
+`ReserveBalanceTracker::before_checkpoint_revert` before restoring state, except during preserved
+synthetic execution, and always call `on_checkpoint_revert` afterward. This retains an outer
+frame's reserve violation before its original failure rolls back state, while allowing a
+synthetic frame to revert its own temporary deficit.
 
-Raw inspector `call_end` and `create_end` callbacks run before transaction-level reserve
-adjudication. Their root-frame outcome and observed execution state are provisional: a successful
-frame can still become a reserve-rejected transaction. Inspection consumers must use the returned
-`ExecutionResult` to determine the final transaction status and reconcile their traces with it.
-These callbacks do not provide canonical Monad reserve-rejection trace status.
+Reserve adjudication and execution rollback precede the root inspector `call_end`, `create_end`,
+and `frame_end` callbacks. These callbacks observe a `Revert` outcome after reserve rejection,
+including for immediate calls and inspector-supplied outcomes. Inspectors can still override that
+outcome; changing its status or output replaces the reserve rejection in the final result without
+restoring rolled-back execution. Nested callbacks retain their ordinary order and behavior.
+
+Stock REVM tracers therefore report failed reserve transactions using their generic revert error
+labels. The distinct reserve reason is available in `MonadHaltReason::ReserveBalanceViolation`;
+the trace error string does not reproduce the custom canonical Monad label. Log callbacks record
+attempted execution, and stock Geth call traces can retain attempted root logs even for ordinary
+reverts. Committed logs are determined by `ExecutionResult`, which excludes rejected execution.
 
 Embedders that execute a synthetic transaction as an enclosing call must set
 `MonadJournalTr::set_preserve_reserve_balance_tracker(true)` only for that synthetic execution.

@@ -5,6 +5,7 @@
 //! - Blob transactions (EIP-4844) are not supported
 //! - No header validation for prevrandao or excess_blob_gas (Monad doesn't use these)
 use revm::{
+    context::journaled_state::JournalCheckpoint,
     context_interface::{
         context::take_error,
         journaled_state::account::JournaledAccountTr,
@@ -13,24 +14,24 @@ use revm::{
         Block, Cfg, ContextTr, Database, JournalTr, Transaction,
     },
     handler::{
-        evm::FrameTr, handler::EvmTrError, pre_execution, validation, EthFrame, EvmTr, FrameResult,
-        Handler, MainnetHandler,
+        evm::FrameTr, handler::EvmTrError, pre_execution, validation, EvmTr, FrameResult, Handler,
+        MainnetHandler,
     },
-    inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{
-        interpreter::EthInterpreter, interpreter_action::FrameInit, FrameInput, GasTracker,
-        InitialAndFloorGas, InstructionResult,
+        interpreter_action::FrameInit, FrameInput, GasTracker, InitialAndFloorGas,
+        InstructionResult,
     },
     primitives::{hardfork::SpecId, U256},
 };
 
-use crate::chain::MonadChainContext;
 use crate::journal::MonadJournalTr;
 use crate::reserve_balance::tracker::ReserveBalanceInit;
 use crate::staking::constants::SYSTEM_ADDRESS;
 use crate::MonadHaltReason;
 
 use crate::api::exec::MonadContextTr;
+
+mod inspector;
 
 /// Monad handler extends [`Handler`] with Monad-specific gas handling.
 ///
@@ -249,6 +250,7 @@ where
         evm: &mut Self::Evm,
         gas: &mut GasTracker,
     ) -> Result<Option<FrameInit>, Self::Error> {
+        self.reserve_balance_violation = false;
         let Some(frame) = self.mainnet.first_frame_input(evm, gas)? else {
             return Ok(None);
         };
@@ -298,35 +300,63 @@ where
         evm: &mut EVM,
         execute: impl FnOnce(&mut Self, &mut EVM) -> Result<FrameResult, ERROR>,
     ) -> Result<FrameResult, ERROR> {
+        let checkpoint = self.begin_execution(evm);
+        let mut result = execute(self, evm)?;
+        self.adjudicate_execution(evm, &mut result, checkpoint, false)?;
+        Ok(result)
+    }
+
+    fn begin_execution(&mut self, evm: &mut EVM) -> Option<JournalCheckpoint> {
         self.reserve_balance_violation = false;
         if evm.ctx().journal().preserves_reserve_balance_tracker() {
-            return execute(self, evm);
+            return None;
         }
 
-        let sender = evm.ctx().tx().caller();
-        let create = evm.ctx().tx().kind().is_create();
         // Fees, CALL nonce advancement, and authorizations precede this checkpoint.
         let checkpoint = evm.ctx().journal_mut().checkpoint_execution();
         let frame_depth = evm.ctx().journal().depth() + 1;
         evm.ctx().journal_mut().reserve_balance_mut().start_execution(frame_depth);
+        Some(checkpoint)
+    }
 
-        let mut result = execute(self, evm)?;
+    fn adjudicate_execution(
+        &mut self,
+        evm: &mut EVM,
+        result: &mut FrameResult,
+        checkpoint: Option<JournalCheckpoint>,
+        inspector_override: bool,
+    ) -> Result<(), ERROR> {
+        let Some(checkpoint) = checkpoint else {
+            return Ok(());
+        };
         let violation = evm.ctx().journal_mut().reserve_balance_mut().take_execution_violation();
         // These frame-initialization failures return before the canonical reserve check.
-        let early_failure = match &result {
-            FrameResult::Create(outcome) => outcome.address.is_none(),
-            FrameResult::Call(outcome) => matches!(
-                outcome.result.result,
-                InstructionResult::OutOfFunds | InstructionResult::CallTooDeep
-            ),
-        };
-        if !violation || early_failure {
+        let early_failure = !inspector_override
+            && match &result {
+                FrameResult::Create(outcome) => outcome.address.is_none(),
+                FrameResult::Call(outcome) => matches!(
+                    outcome.result.result,
+                    InstructionResult::OutOfFunds | InstructionResult::CallTooDeep
+                ),
+            };
+        // A pending host error must retain its frame outcome until normal error handling.
+        if !violation || early_failure || evm.ctx().error().is_err() {
             evm.ctx().journal_mut().commit_execution();
-            return Ok(result);
+            return Ok(());
         }
 
+        let create = evm.ctx().tx().kind().is_create();
+        let sender = evm.ctx().tx().caller();
+        let override_nonce = if create && inspector_override {
+            Some(evm.ctx().journal_mut().load_account(sender)?.info.nonce)
+        } else {
+            None
+        };
         evm.ctx().journal_mut().revert_execution(checkpoint);
-        if create {
+        if let Some(nonce) = override_nonce {
+            // An inspector may have executed CREATE in isolation or merely supplied an outcome.
+            evm.ctx().journal_mut().load_account_mut(sender)?.set_nonce(nonce);
+        } else if create {
             // CREATE advances the sender nonce inside REVM's frame initialization.
             evm.ctx().journal_mut().load_account_mut(sender)?.bump_nonce();
         }
@@ -337,29 +367,7 @@ where
         result.gas_mut().set_refund(0);
         result.interpreter_result_mut().result = InstructionResult::Revert;
         self.reserve_balance_violation = true;
-        Ok(result)
-    }
-}
-
-impl<EVM, ERROR> InspectorHandler for MonadHandler<EVM, ERROR, EthFrame<EthInterpreter>>
-where
-    EVM: InspectorEvmTr<
-        Context: MonadContextTr<Chain = MonadChainContext, Journal: MonadJournalTr>,
-        Frame = EthFrame<EthInterpreter>,
-        Inspector: Inspector<<<Self as Handler>::Evm as EvmTr>::Context, EthInterpreter>,
-    >,
-    ERROR: EvmTrError<EVM>,
-{
-    type IT = EthInterpreter;
-
-    fn inspect_run_exec_loop(
-        &mut self,
-        evm: &mut Self::Evm,
-        first_frame_input: FrameInit,
-    ) -> Result<FrameResult, Self::Error> {
-        self.execute_with_reserve_check(evm, |this, evm| {
-            this.mainnet.inspect_run_exec_loop(evm, first_frame_input)
-        })
+        Ok(())
     }
 }
 
