@@ -1920,6 +1920,7 @@ pub fn run_staking_write<S: StakingStorage>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -2479,8 +2480,32 @@ mod tests {
     }
 
     #[test]
-    fn test_compound_below_min_delegation_reverts() {
-        let (mut storage, caller, val_id) = compound_setup(U256::from(1u64));
+    fn test_compound_zero_rewards_is_noop() {
+        let (mut storage, caller, val_id) = compound_setup(U256::ZERO);
+        storage.slots.insert(validator_key(val_id, validator_offsets::STAKE), DUST_THRESHOLD);
+        storage
+            .slots
+            .insert(delegator_key(val_id, &caller, delegator_offsets::STAKE), DUST_THRESHOLD);
+        // Explicit zero slots and absent slots represent the same storage state.
+        storage.slots.retain(|_, value| !value.is_zero());
+        let initial_storage = storage.slots.clone();
+
+        let input = compoundCall { validatorId: val_id }.abi_encode();
+        let (_, output) =
+            handle_compound(&mut storage, &input, gas::COMPOUND + 1_000, &caller).unwrap();
+
+        assert!(compoundCall::abi_decode_returns(&output).unwrap());
+        assert!(storage.logs.is_empty());
+        assert!(storage.transfers.is_empty());
+        storage.slots.retain(|_, value| !value.is_zero());
+        assert_eq!(storage.slots, initial_storage);
+    }
+
+    #[rstest]
+    #[case::one_wei(U256::from(1))]
+    #[case::below_threshold(DUST_THRESHOLD - U256::from(1))]
+    fn test_compound_below_min_delegation_reverts(#[case] rewards: U256) {
+        let (mut storage, caller, val_id) = compound_setup(rewards);
 
         let input = compoundCall { validatorId: val_id }.abi_encode();
         let result = handle_compound(&mut storage, &input, gas::COMPOUND + 1_000, &caller);
