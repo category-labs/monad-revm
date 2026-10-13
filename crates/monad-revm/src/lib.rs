@@ -37,6 +37,7 @@ pub mod page_opcode;
 pub mod precompiles;
 /// Monad reserve-balance precompile (0x1001).
 pub mod reserve_balance;
+pub mod result;
 /// Monad specification identifiers and hardfork definitions.
 pub mod spec;
 /// Monad staking precompile (0x1000).
@@ -47,4 +48,5 @@ pub use cfg::{MonadCfgEnv, MONAD_MAX_CODE_SIZE, MONAD_MAX_INITCODE_SIZE};
 pub use chain::MonadChainContext;
 pub use evm::MonadEvm;
 pub use journal::{MonadJournal, MonadJournalTr};
+pub use result::MonadHaltReason;
 pub use spec::*;

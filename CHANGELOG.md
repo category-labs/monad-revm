@@ -13,6 +13,17 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
   staking contract errors.
 - Execute empty code without precompile gas charges when EIP-7702 delegates to an Ethereum
   precompile, including top-level calls, all CALL instructions, and custom precompile providers.
+- Reject transaction execution that violates reserve balances while retaining fees, sender nonce,
+  and EIP-7702 authorizations. Preserved synthetic calls defer enforcement to their enclosing
+  transaction.
+
+### Changed
+
+- Expose reserve rejection as `MonadHaltReason::ReserveBalanceViolation`, with Ethereum halts
+  wrapped in `MonadHaltReason::Ethereum`. Execution results now use this Monad halt-reason type.
+- Require `MonadJournalTr` implementations to support execution checkpoints that preserve call
+  depth via `checkpoint_execution`, `commit_execution`, and `revert_execution`.
+- Construct `MonadHandler` via `new` or `Default` to initialize transaction outcome state.
 
 ## [0.8.0] - 2026-09-09
 

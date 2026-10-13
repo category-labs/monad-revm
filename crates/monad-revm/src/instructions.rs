@@ -265,6 +265,7 @@ mod tests {
     use super::*;
     #[cfg(feature = "memory_limit")]
     use crate::cfg::MONAD_MEMORY_LIMIT;
+    use crate::MonadHaltReason;
     use crate::{
         api::{
             builder::MonadBuilder,
@@ -343,7 +344,7 @@ mod tests {
         assert_eq!(eth.get(GasId::cold_account_additional_cost()), 2500);
     }
 
-    fn run_contract(spec: MonadHardfork, code: Vec<u8>) -> ExecutionResult<HaltReason> {
+    fn run_contract(spec: MonadHardfork, code: Vec<u8>) -> ExecutionResult<MonadHaltReason> {
         let caller = Address::from([0x11; 20]);
         let contract = Address::from([0x22; 20]);
 
@@ -509,7 +510,7 @@ mod tests {
         delegated_address: Address,
         delegated_code: Vec<u8>,
         extra_accounts: &[(Address, Bytecode)],
-    ) -> ExecutionResult<HaltReason> {
+    ) -> ExecutionResult<MonadHaltReason> {
         let caller = Address::from([0x11; 20]);
         let target = Address::from([0x22; 20]);
 
@@ -546,7 +547,7 @@ mod tests {
         target_code: Bytecode,
         input: Bytes,
         extra_accounts: &[(Address, Bytecode)],
-    ) -> ExecutionResult<HaltReason> {
+    ) -> ExecutionResult<MonadHaltReason> {
         let caller = Address::from([0x11; 20]);
         let target = Address::from([0x22; 20]);
 
@@ -922,7 +923,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory_limit")]
-    fn run_memory_limit_contract(offset: u32) -> ExecutionResult<HaltReason> {
+    fn run_memory_limit_contract(offset: u32) -> ExecutionResult<MonadHaltReason> {
         let caller = Address::from([0x11; 20]);
         let contract = Address::from([0x22; 20]);
 
@@ -1176,7 +1177,9 @@ mod tests {
             matches!(
                 above_limit,
                 ExecutionResult::Halt {
-                    reason: HaltReason::OutOfGas(OutOfGasError::MemoryLimit),
+                    reason: MonadHaltReason::Ethereum(HaltReason::OutOfGas(
+                        OutOfGasError::MemoryLimit
+                    )),
                     ..
                 }
             ),
@@ -1227,7 +1230,10 @@ mod tests {
         assert!(
             matches!(
                 monad_eight_result,
-                ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+                ExecutionResult::Halt {
+                    reason: MonadHaltReason::Ethereum(HaltReason::NotActivated),
+                    ..
+                }
             ),
             "CLZ should be unavailable before MonadNine, got {monad_eight_result:?}"
         );
@@ -1250,7 +1256,9 @@ mod tests {
                     matches!(
                         result,
                         ExecutionResult::Halt {
-                            reason: HaltReason::OpcodeNotFound | HaltReason::NotActivated,
+                            reason: MonadHaltReason::Ethereum(
+                                HaltReason::OpcodeNotFound | HaltReason::NotActivated
+                            ),
                             ..
                         }
                     ),
@@ -1312,7 +1320,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+                    ExecutionResult::Halt { reason: MonadHaltReason::Ethereum(HaltReason::NotActivated), .. }
                 ),
                 "CREATE should halt with NotActivated for delegated accounts on {spec:?}, got {result:?}"
             );
@@ -1341,7 +1349,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    ExecutionResult::Halt { reason: HaltReason::NotActivated, .. }
+                    ExecutionResult::Halt { reason: MonadHaltReason::Ethereum(HaltReason::NotActivated), .. }
                 ),
                 "CREATE2 should halt with NotActivated for delegated accounts on {spec:?}, got {result:?}"
             );
@@ -1391,7 +1399,7 @@ mod tests {
             assert!(
                 matches!(
                     delegated_result,
-                    ExecutionResult::Halt { reason: HaltReason::InvalidFEOpcode, .. }
+                    ExecutionResult::Halt { reason: MonadHaltReason::Ethereum(HaltReason::InvalidFEOpcode), .. }
                 ),
                 "nested delegatecall should hit the INVALID sentinel when delegated CREATE2 fails on {spec:?}, got {delegated_result:?}"
             );
