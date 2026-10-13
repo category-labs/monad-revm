@@ -2,6 +2,13 @@
 
 Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Execute empty code without precompile gas charges when EIP-7702 delegates to an Ethereum
+  precompile, including top-level calls, all CALL instructions, and custom precompile providers.
+
 ## [0.8.0] - 2026-09-09
 
 ### Changed

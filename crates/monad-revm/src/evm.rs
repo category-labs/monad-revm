@@ -2,7 +2,7 @@
 use crate::{
     api::exec::MonadContextTr,
     instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
-    precompiles::MonadPrecompiles,
+    precompiles::{DelegationAwarePrecompiles, MonadPrecompiles},
     MonadJournalTr,
 };
 use revm::{
@@ -10,7 +10,8 @@ use revm::{
     context_interface::{ContextTr, JournalTr},
     handler::{evm::FrameTr, EthFrame, EvmTr, FrameInitOrResult, ItemOrResult, PrecompileProvider},
     inspector::{InspectorEvmTr, JournalExt},
-    interpreter::{interpreter::EthInterpreter, InterpreterResult},
+    interpreter::{interpreter::EthInterpreter, FrameInput, InterpreterResult},
+    state::Bytecode,
     Database, Inspector,
 };
 
@@ -132,7 +133,8 @@ where
         ContextError<<<Self::Context as ContextTr>::Db as Database>::Error>,
     > {
         let spec = self.0.ctx.cfg().spec();
-        if self.0.frame_stack.index().is_none() {
+        let is_first_init = self.0.frame_stack.index().is_none();
+        if is_first_init {
             self.0.instruction.set_spec(spec);
         }
         self.0.ctx.journal_mut().set_monad_spec(spec);
@@ -143,7 +145,46 @@ where
             self.0.ctx.journal_mut().warm_precompiles(self.0.precompiles.warm_addresses());
         }
         frame_input.memory.set_memory_limit(self.0.ctx.cfg().memory_limit());
-        self.0.frame_init(frame_input)
+
+        // Keep the original code address until this point: unlike target_address, it identifies
+        // the called account for CALLCODE and DELEGATECALL as well as CALL and STATICCALL.
+        let mut is_delegated = false;
+        if let FrameInput::Call(inputs) = &mut frame_input.frame_input {
+            let account = self
+                .0
+                .ctx
+                .journal_mut()
+                .load_account_with_code(inputs.bytecode_address)
+                .map_err(ContextError::Db)?;
+            if let Some(address) = account.info.code.as_ref().and_then(Bytecode::eip7702_address) {
+                inputs.bytecode_address = address;
+                is_delegated = true;
+            }
+        }
+
+        let new_frame = if is_first_init {
+            self.0.frame_stack.start_init()
+        } else {
+            self.0.frame_stack.get_next()
+        };
+        let mut precompiles =
+            DelegationAwarePrecompiles { inner: &mut self.0.precompiles, is_delegated };
+        let result = Self::Frame::init_with_context(
+            new_frame,
+            &mut self.0.ctx,
+            &mut precompiles,
+            frame_input,
+        )?;
+
+        Ok(result.map_item(|token| {
+            // SAFETY: The token refers to the frame initialized immediately above.
+            if is_first_init {
+                unsafe { self.0.frame_stack.end_init(token) };
+            } else {
+                unsafe { self.0.frame_stack.push(token) };
+            }
+            self.0.frame_stack.get()
+        }))
     }
 
     fn frame_run(
