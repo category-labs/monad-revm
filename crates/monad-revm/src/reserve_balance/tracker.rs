@@ -62,7 +62,8 @@ impl ReserveBalanceTracker {
     /// Records the outer execution's reserve status before its frame is rolled back.
     ///
     /// Custom journal implementations must call this before reverting a checkpoint, passing
-    /// the current journal depth. Nested frame reversions do not finalize reserve enforcement.
+    /// the current journal depth, except while preserving the tracker for a synthetic frame.
+    /// Synthetic and nested frame reversions do not finalize reserve enforcement.
     pub fn before_checkpoint_revert(&mut self, depth: usize) {
         if self.execution_depth == Some(depth) {
             self.reverted_execution_violation = self.has_violation();

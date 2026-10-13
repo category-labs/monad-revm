@@ -29,7 +29,8 @@ use revm::{
 /// Monad journal extension used by reserve-balance-aware execution.
 ///
 /// Checkpoint rollback must notify [`ReserveBalanceTracker::before_checkpoint_revert`] before
-/// restoring state and [`ReserveBalanceTracker::on_checkpoint_revert`] after restoring it.
+/// restoring state unless reserve tracking is preserved for a synthetic frame. It must always
+/// notify [`ReserveBalanceTracker::on_checkpoint_revert`] after restoring state.
 pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Returns the reserve-balance tracker.
     fn reserve_balance(&self) -> &ReserveBalanceTracker;
@@ -124,7 +125,9 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     fn on_checkpoint_revert(&mut self, checkpoint: JournalCheckpoint) {
-        self.reserve_balance.before_checkpoint_revert(self.inner.depth());
+        if !self.preserve_reserve_balance_tracker {
+            self.reserve_balance.before_checkpoint_revert(self.inner.depth());
+        }
         let reverted_addresses: Vec<_> = self
             .inner
             .journal
@@ -642,6 +645,46 @@ mod tests {
 
         assert!(!journal.reserve_balance().has_violation());
         assert!(journal.reserve_balance().tracking_enabled());
+    }
+
+    #[test]
+    fn preserved_root_rollback_does_not_finalize_enclosing_execution() {
+        let sender = Address::repeat_byte(0x11);
+        let tracked = Address::repeat_byte(0x22);
+        let recipient = Address::repeat_byte(0x33);
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            tracked,
+            AccountInfo { balance: U256::from(1_000), ..Default::default() },
+        );
+        let mut journal = MonadJournal::new(db);
+        journal.reserve_balance_mut().init(ReserveBalanceInit {
+            chain: &MonadChainContext::default(),
+            spec: MonadHardfork::MonadTen,
+            sender,
+            effective_gas_price: 0,
+            gas_limit: 0,
+            sender_is_delegated: false,
+            sender_account: None,
+        });
+        journal.reserve_balance_mut().start_execution(1);
+
+        for preserve in [false, true] {
+            let mut parent = journal.clone();
+            let mut isolated = parent.clone();
+            isolated.set_preserve_reserve_balance_tracker(preserve);
+            let checkpoint = isolated.checkpoint();
+            assert_eq!(isolated.depth(), 1);
+            assert!(isolated.transfer(tracked, recipient, U256::from(1)).unwrap().is_none());
+            assert!(isolated.reserve_balance().has_violation());
+
+            isolated.checkpoint_revert(checkpoint);
+            assert!(!isolated.reserve_balance().has_violation());
+            assert_eq!(isolated.state[&tracked].info.balance, U256::from(1_000));
+            assert_eq!(isolated.state[&recipient].info.balance, U256::ZERO);
+            *parent.reserve_balance_mut() = isolated.reserve_balance().clone();
+            assert_eq!(parent.reserve_balance_mut().take_execution_violation(), !preserve);
+        }
     }
 
     #[test]
