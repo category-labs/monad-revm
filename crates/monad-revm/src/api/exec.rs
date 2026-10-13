@@ -2,12 +2,12 @@
 
 use crate::{
     chain::MonadChainContext, evm::MonadEvm, handler::MonadHandler,
-    instructions::MonadInstructions, journal::MonadJournalTr, MonadHardfork,
+    instructions::MonadInstructions, journal::MonadJournalTr, MonadHaltReason, MonadHardfork,
 };
 use revm::{
     context::{result::ExecResultAndState, ContextSetters},
     context_interface::{
-        result::{EVMError, ExecutionResult, HaltReason},
+        result::{EVMError, ExecutionResult},
         Cfg, ContextTr, Database, JournalTr, Transaction,
     },
     handler::{system_call::SystemCallEvm, EthFrame, Handler, PrecompileProvider, SystemCallTx},
@@ -56,7 +56,7 @@ where
     type Block = <CTX as ContextTr>::Block;
     type State = EvmState;
     type Error = MonadError<CTX>;
-    type ExecutionResult = ExecutionResult<HaltReason>;
+    type ExecutionResult = ExecutionResult<MonadHaltReason>;
 
     fn set_block(&mut self, block: Self::Block) {
         self.0.ctx.set_block(block);

@@ -8,7 +8,7 @@ use revm::{
     context_interface::{
         context::take_error,
         journaled_state::account::JournaledAccountTr,
-        result::{HaltReason, InvalidTransaction},
+        result::{ExecutionResult, InvalidTransaction, ResultGas},
         transaction::{AuthorizationTr, TransactionType},
         Block, Cfg, ContextTr, Database, JournalTr, Transaction,
     },
@@ -18,7 +18,8 @@ use revm::{
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{
-        interpreter::EthInterpreter, interpreter_action::FrameInit, GasTracker, InitialAndFloorGas,
+        interpreter::EthInterpreter, interpreter_action::FrameInit, FrameInput, GasTracker,
+        InitialAndFloorGas, InstructionResult,
     },
     primitives::{hardfork::SpecId, U256},
 };
@@ -27,6 +28,7 @@ use crate::chain::MonadChainContext;
 use crate::journal::MonadJournalTr;
 use crate::reserve_balance::tracker::ReserveBalanceInit;
 use crate::staking::constants::SYSTEM_ADDRESS;
+use crate::MonadHaltReason;
 
 use crate::api::exec::MonadContextTr;
 
@@ -40,12 +42,13 @@ pub struct MonadHandler<EVM, ERROR, FRAME> {
     /// Mainnet handler allows us to use functions from the mainnet handler inside monad handler.
     /// So we dont duplicate the logic
     pub mainnet: MainnetHandler<EVM, ERROR, FRAME>,
+    reserve_balance_violation: bool,
 }
 
 impl<EVM, ERROR, FRAME> MonadHandler<EVM, ERROR, FRAME> {
     /// Create a new Monad handler.
     pub fn new() -> Self {
-        Self { mainnet: MainnetHandler::default() }
+        Self { mainnet: MainnetHandler::default(), reserve_balance_violation: false }
     }
 }
 
@@ -101,7 +104,7 @@ where
 {
     type Evm = EVM;
     type Error = ERROR;
-    type HaltReason = HaltReason;
+    type HaltReason = MonadHaltReason;
 
     /// Validates transaction and configuration fields.
     ///
@@ -163,6 +166,34 @@ where
         // Abort before post-execution can pay the beneficiary or mask the original error.
         take_error::<Self::Error, _>(evm.ctx().error())?;
         self.mainnet.last_frame_result(evm, frame_result, parent_gas)
+    }
+
+    fn run_exec_loop(
+        &mut self,
+        evm: &mut Self::Evm,
+        first_frame_input: FrameInit,
+    ) -> Result<FrameResult, Self::Error> {
+        self.execute_with_reserve_check(evm, |this, evm| {
+            this.mainnet.run_exec_loop(evm, first_frame_input)
+        })
+    }
+
+    fn execution_result(
+        &mut self,
+        evm: &mut Self::Evm,
+        result: FrameResult,
+        result_gas: ResultGas,
+    ) -> Result<ExecutionResult<Self::HaltReason>, Self::Error> {
+        let reserve_balance_violation = core::mem::take(&mut self.reserve_balance_violation);
+        let result = self.mainnet.execution_result(evm, result, result_gas)?;
+        if reserve_balance_violation {
+            return Ok(ExecutionResult::Halt {
+                reason: MonadHaltReason::ReserveBalanceViolation,
+                gas: result_gas,
+                logs: result.into_logs(),
+            });
+        }
+        Ok(result.map_haltreason(Into::into))
     }
 
     // Disable gas refunds
@@ -256,6 +287,60 @@ where
     }
 }
 
+impl<EVM, ERROR, FRAME> MonadHandler<EVM, ERROR, FRAME>
+where
+    EVM: EvmTr<Context: MonadContextTr, Frame = FRAME>,
+    ERROR: EvmTrError<EVM>,
+    FRAME: FrameTr<FrameResult = FrameResult, FrameInit = FrameInit>,
+{
+    fn execute_with_reserve_check(
+        &mut self,
+        evm: &mut EVM,
+        execute: impl FnOnce(&mut Self, &mut EVM) -> Result<FrameResult, ERROR>,
+    ) -> Result<FrameResult, ERROR> {
+        self.reserve_balance_violation = false;
+        if evm.ctx().journal().preserves_reserve_balance_tracker() {
+            return execute(self, evm);
+        }
+
+        let sender = evm.ctx().tx().caller();
+        let create = evm.ctx().tx().kind().is_create();
+        // Fees, CALL nonce advancement, and authorizations precede this checkpoint.
+        let checkpoint = evm.ctx().journal_mut().checkpoint_execution();
+        let frame_depth = evm.ctx().journal().depth() + 1;
+        evm.ctx().journal_mut().reserve_balance_mut().start_execution(frame_depth);
+
+        let mut result = execute(self, evm)?;
+        let violation = evm.ctx().journal_mut().reserve_balance_mut().take_execution_violation();
+        // These frame-initialization failures return before the canonical reserve check.
+        let early_failure = match &result {
+            FrameResult::Create(outcome) => outcome.address.is_none(),
+            FrameResult::Call(outcome) => matches!(
+                outcome.result.result,
+                InstructionResult::OutOfFunds | InstructionResult::CallTooDeep
+            ),
+        };
+        if !violation || early_failure {
+            evm.ctx().journal_mut().commit_execution();
+            return Ok(result);
+        }
+
+        evm.ctx().journal_mut().revert_execution(checkpoint);
+        if create {
+            // CREATE advances the sender nonce inside REVM's frame initialization.
+            evm.ctx().journal_mut().load_account_mut(sender)?.bump_nonce();
+        }
+        // CALL retains unused execution gas; CREATE and exceptional exits consume it.
+        if create || result.instruction_result().is_halt() {
+            result.gas_mut().spend_all();
+        }
+        result.gas_mut().set_refund(0);
+        result.interpreter_result_mut().result = InstructionResult::Revert;
+        self.reserve_balance_violation = true;
+        Ok(result)
+    }
+}
+
 impl<EVM, ERROR> InspectorHandler for MonadHandler<EVM, ERROR, EthFrame<EthInterpreter>>
 where
     EVM: InspectorEvmTr<
@@ -266,6 +351,16 @@ where
     ERROR: EvmTrError<EVM>,
 {
     type IT = EthInterpreter;
+
+    fn inspect_run_exec_loop(
+        &mut self,
+        evm: &mut Self::Evm,
+        first_frame_input: FrameInit,
+    ) -> Result<FrameResult, Self::Error> {
+        self.execute_with_reserve_check(evm, |this, evm| {
+            this.mainnet.inspect_run_exec_loop(evm, first_frame_input)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +407,16 @@ mod tests {
             opcode::PUSH2,
             0x10,
             0x01,
+            opcode::GAS,
+            opcode::CALL,
+            opcode::POP,
+            // Repay the sender after observing the temporary reserve violation.
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::PUSH0,
+            opcode::CALLVALUE,
+            opcode::CALLER,
             opcode::GAS,
             opcode::CALL,
             opcode::POP,
@@ -816,7 +921,7 @@ mod tests {
         spec: MonadHardfork,
         delegated_address: Address,
         input: Bytes,
-    ) -> ResultAndState<HaltReason> {
+    ) -> ResultAndState<MonadHaltReason> {
         let caller = Address::from([0x11; 20]);
         let authority = Address::from([0x22; 20]);
         let mut db = InMemoryDB::default();

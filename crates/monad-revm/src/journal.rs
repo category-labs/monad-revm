@@ -27,6 +27,9 @@ use revm::{
 };
 
 /// Monad journal extension used by reserve-balance-aware execution.
+///
+/// Checkpoint rollback must notify [`ReserveBalanceTracker::before_checkpoint_revert`] before
+/// restoring state and [`ReserveBalanceTracker::on_checkpoint_revert`] after restoring it.
 pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Returns the reserve-balance tracker.
     fn reserve_balance(&self) -> &ReserveBalanceTracker;
@@ -46,6 +49,18 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Returns the MIP-8 page access tracker mutably.
     fn page_access_mut(&mut self) -> &mut PageAccessTracker;
 
+    /// Snapshots execution state without increasing the observable call depth.
+    ///
+    /// This checkpoint must be opened after transaction fees, CALL nonce advancement, and
+    /// authorizations, and settled after all execution frames have returned.
+    fn checkpoint_execution(&mut self) -> JournalCheckpoint;
+
+    /// Accepts the execution snapshot without changing the call depth.
+    fn commit_execution(&mut self);
+
+    /// Reverts the execution snapshot without changing the call depth.
+    fn revert_execution(&mut self, checkpoint: JournalCheckpoint);
+
     /// Returns whether transaction boundaries preserve the reserve-balance tracker.
     fn preserves_reserve_balance_tracker(&self) -> bool {
         false
@@ -54,8 +69,10 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
     /// Sets whether transaction boundaries preserve the reserve-balance tracker.
     ///
     /// This is intended for synthetic transactions that model an internal call while retaining
-    /// the enclosing protocol transaction's reserve-balance state. Restore this to `false` before
-    /// executing the next ordinary transaction.
+    /// the enclosing protocol transaction's reserve-balance state. Such calls defer reserve
+    /// enforcement: their completion does not finalize the enclosing transaction. The embedder
+    /// must check `reserve_balance().has_violation()` before accepting the enclosing execution
+    /// checkpoint. Restore this to `false` before executing the next ordinary transaction.
     fn set_preserve_reserve_balance_tracker(&mut self, _preserve: bool) {}
 }
 
@@ -107,6 +124,7 @@ impl<DB: Database> MonadJournal<DB> {
     }
 
     fn on_checkpoint_revert(&mut self, checkpoint: JournalCheckpoint) {
+        self.reserve_balance.before_checkpoint_revert(self.inner.depth());
         let reverted_addresses: Vec<_> = self
             .inner
             .journal
@@ -158,6 +176,23 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
 
     fn page_access_mut(&mut self) -> &mut PageAccessTracker {
         &mut self.page_access
+    }
+
+    fn checkpoint_execution(&mut self) -> JournalCheckpoint {
+        self.page_access.checkpoint();
+        let checkpoint = self.inner.checkpoint();
+        self.inner.checkpoint_commit();
+        checkpoint
+    }
+
+    fn commit_execution(&mut self) {
+        self.page_access.checkpoint_commit();
+    }
+
+    fn revert_execution(&mut self, checkpoint: JournalCheckpoint) {
+        // Balance the depth decrement performed by the ordinary checkpoint revert.
+        self.inner.checkpoint();
+        self.on_checkpoint_revert(checkpoint);
     }
 
     fn preserves_reserve_balance_tracker(&self) -> bool {

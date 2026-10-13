@@ -251,9 +251,34 @@ context is intentionally empty and is not sufficient to reproduce historical blo
 The default maximum reserve balance is 10 MON.
 
 The standard transaction handler initializes and clears `ReserveBalanceTracker` at transaction
-boundaries. Embedders that execute a synthetic transaction as an enclosing call must set
-`MonadJournalTr::set_preserve_reserve_balance_tracker(true)` only for that synthetic execution and
-restore it to `false` before the next ordinary transaction. If the backing fork, journal state, or
+boundaries. On every supported Monad hardfork, it rejects the outer CALL or CREATE execution if
+reserves are still violated at completion. Transfers, storage, deployed code, and logs roll back;
+full fees, the sender nonce, and EIP-7702 authorizations remain. Temporary deficits that are repaid
+before completion, including those rolled back by nested calls, do not reject the transaction.
+
+Execution now returns `ExecutionResult<MonadHaltReason>`: reserve rejection is
+`MonadHaltReason::ReserveBalanceViolation`, and ordinary Ethereum halts are wrapped in
+`MonadHaltReason::Ethereum`. CALL reserve rejection preserves remaining execution gas, while
+CREATE reserve rejection consumes it, matching the canonical execution behavior. Both retain
+Monad's full gas-limit fee charging. Custom `MonadJournalTr` implementations must provide
+`checkpoint_execution`, `commit_execution`, and `revert_execution`, which snapshot execution
+without changing the observable call depth. Their ordinary frame rollback must call
+`ReserveBalanceTracker::before_checkpoint_revert` before restoring state, followed by
+`on_checkpoint_revert` afterward, so an outer frame's reserve violation retains precedence
+over its original execution failure.
+
+Raw inspector `call_end` and `create_end` callbacks run before transaction-level reserve
+adjudication. Their root-frame outcome and observed execution state are provisional: a successful
+frame can still become a reserve-rejected transaction. Inspection consumers must use the returned
+`ExecutionResult` to determine the final transaction status and reconcile their traces with it.
+These callbacks do not provide canonical Monad reserve-rejection trace status.
+
+Embedders that execute a synthetic transaction as an enclosing call must set
+`MonadJournalTr::set_preserve_reserve_balance_tracker(true)` only for that synthetic execution.
+This defers enforcement along with tracker initialization and clearing: a synthetic call may
+succeed while the enclosing transaction is below reserve. The embedder must check
+`reserve_balance().has_violation()` before accepting the enclosing execution checkpoint, and
+restore the flag to `false` before the next ordinary transaction. If the backing fork, journal state, or
 chain metadata is replaced while a tracker is preserved, call `ReserveBalanceTracker::rebase` with
 the replacement state and `MonadChainContext`; cached thresholds must not cross that boundary.
 
