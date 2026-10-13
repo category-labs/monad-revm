@@ -2485,7 +2485,7 @@ mod tests {
         let input = compoundCall { validatorId: val_id }.abi_encode();
         let result = handle_compound(&mut storage, &input, gas::COMPOUND + 1_000, &caller);
 
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "delegation is too small");
         assert!(storage.logs.is_empty());
     }
 
