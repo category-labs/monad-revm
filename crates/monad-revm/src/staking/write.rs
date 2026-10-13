@@ -1837,8 +1837,20 @@ fn fallback_result(gas_limit: u64) -> InterpreterResult {
 
 /// Dispatch a write operation using the StakingStorage trait.
 ///
-/// Returns `Ok(InterpreterResult)` or `Err(String)`.
+/// Returns contract outcomes as `Ok(InterpreterResult)` and fatal storage errors as `Err(String)`.
+/// Adapters with a typed context-error channel must also propagate that error in their EVM handler.
 pub fn run_staking_write<S: StakingStorage>(
+    input: &[u8],
+    gas_limit: u64,
+    storage: &mut S,
+    caller: &Address,
+    call_value: U256,
+) -> Result<InterpreterResult, String> {
+    let result = run_staking_write_inner(input, gas_limit, storage, caller, call_value);
+    storage.take_fatal_error().map_or(result, Err)
+}
+
+fn run_staking_write_inner<S: StakingStorage>(
     input: &[u8],
     gas_limit: u64,
     storage: &mut S,

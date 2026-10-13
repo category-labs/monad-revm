@@ -6,6 +6,11 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Fixed
 
+- Aborted staking execution on database read, write, and transfer failures while preserving
+  the original database error. Failed state access can no longer be caught by a calling contract
+  or committed as a reverted transaction.
+- Added a fatal-error channel for custom staking storage adapters, separate from catchable
+  staking contract errors.
 - Execute empty code without precompile gas charges when EIP-7702 delegates to an Ethereum
   precompile, including top-level calls, all CALL instructions, and custom precompile providers.
 

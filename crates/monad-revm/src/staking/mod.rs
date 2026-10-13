@@ -39,7 +39,7 @@ use alloc::{
 use alloy_sol_types::SolCall;
 use interface::IMonadStaking::*;
 use revm::{
-    context_interface::{ContextTr, JournalTr, LocalContextTr},
+    context_interface::{ContextError, ContextTr, Database, JournalTr, LocalContextTr},
     interpreter::{CallInputs, CallScheme, Gas, InstructionResult, InterpreterResult},
     precompile::PrecompileHalt,
     primitives::{Address, Bytes, Log, U256},
@@ -52,8 +52,24 @@ use storage::{
 /// Run the staking precompile.
 ///
 /// Returns `None` if the address is not the staking precompile.
-/// Returns `Some(result)` with the execution result.
+/// Returns `Some(result)` with the execution result. Database failures are retained in
+/// [`ContextTr::error`] and return [`InstructionResult::FatalExternalError`]. The EVM
+/// handler must propagate that context error before producing a transaction result.
 pub fn run_staking_precompile<CTX: ContextTr>(
+    context: &mut CTX,
+    inputs: &CallInputs,
+) -> Result<Option<InterpreterResult>, String> {
+    let result = run_staking_precompile_inner(context, inputs)?;
+    Ok(result.map(|mut result| {
+        if context.error().is_err() {
+            result.result = InstructionResult::FatalExternalError;
+            result.output = Bytes::new();
+        }
+        result
+    }))
+}
+
+fn run_staking_precompile_inner<CTX: ContextTr>(
     context: &mut CTX,
     inputs: &CallInputs,
 ) -> Result<Option<InterpreterResult>, String> {
@@ -726,11 +742,7 @@ fn read_withdrawal_request<CTX: ContextTr>(
 
 /// Read a U256 from storage.
 fn read_storage_u256<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<U256, PrecompileHalt> {
-    context
-        .journal_mut()
-        .sload(STAKING_ADDRESS, key)
-        .map(|r| r.data)
-        .map_err(|e| PrecompileHalt::Other(format!("Storage read failed: {e:?}").into()))
+    ContextTrStorage { context }.sload(key)
 }
 
 /// Read a u64 from storage (stored left-aligned in big-endian format).
@@ -752,6 +764,16 @@ fn read_storage_u64<CTX: ContextTr>(context: &mut CTX, key: U256) -> Result<u64,
 pub trait StorageReader {
     /// Read a U256 value from storage at the given key.
     fn sload(&mut self, key: U256) -> Result<U256, PrecompileHalt>;
+
+    /// Take a fatal storage error that must abort execution instead of becoming a revert.
+    ///
+    /// Adapters without a typed execution-context error channel must retain database errors
+    /// here when a storage operation fails. Both staking dispatchers check this channel before
+    /// returning an EVM result. The default is suitable for infallible
+    /// storage and adapters that retain the original error in [`ContextTr::error`].
+    fn take_fatal_error(&mut self) -> Option<String> {
+        None
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -770,7 +792,7 @@ impl<CTX: ContextTr> StorageReader for ContextTrStorage<'_, CTX> {
             .journal_mut()
             .sload(STAKING_ADDRESS, key)
             .map(|r| r.data)
-            .map_err(|e| PrecompileHalt::Other(format!("Storage read failed: {e:?}").into()))
+            .map_err(|error| record_database_error(self.context, error))
     }
 }
 
@@ -780,7 +802,7 @@ impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
             .journal_mut()
             .sstore(STAKING_ADDRESS, key, value)
             .map(|_| ())
-            .map_err(|e| PrecompileHalt::Other(format!("Storage write failed: {e:?}").into()))
+            .map_err(|error| record_database_error(self.context, error))
     }
 
     fn transfer(&mut self, from: Address, to: Address, amount: U256) -> Result<(), PrecompileHalt> {
@@ -790,7 +812,7 @@ impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
         match self.context.journal_mut().transfer(from, to, amount) {
             Ok(None) => Ok(()),
             Ok(Some(e)) => Err(PrecompileHalt::Other(format!("Transfer failed: {e:?}").into())),
-            Err(e) => Err(PrecompileHalt::Other(format!("Transfer error: {e:?}").into())),
+            Err(error) => Err(record_database_error(self.context, error)),
         }
     }
 
@@ -798,6 +820,17 @@ impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
         self.context.journal_mut().log(log);
         Ok(())
     }
+}
+
+/// Retain the typed database error while unwinding the staking handler.
+fn record_database_error<CTX: ContextTr>(
+    context: &mut CTX,
+    error: <CTX::Db as Database>::Error,
+) -> PrecompileHalt {
+    if context.error().is_ok() {
+        *context.error() = Err(ContextError::Db(error));
+    }
+    PrecompileHalt::other_static("staking database access failed")
 }
 
 /// Run the staking precompile with a custom storage reader.
@@ -812,8 +845,18 @@ impl<CTX: ContextTr> write::StakingStorage for ContextTrStorage<'_, CTX> {
 ///
 /// # Returns
 /// * `Ok(InterpreterResult)` - Execution result with gas used and output
-/// * `Err(String)` - Error message if execution failed
+/// * `Err(String)` - Fatal storage error that must abort execution
 pub fn run_staking_with_reader<R: StorageReader>(
+    input: &[u8],
+    gas_limit: u64,
+    reader: &mut R,
+    call_value: U256,
+) -> Result<InterpreterResult, String> {
+    let result = run_staking_with_reader_inner(input, gas_limit, reader, call_value);
+    reader.take_fatal_error().map_or(result, Err)
+}
+
+fn run_staking_with_reader_inner<R: StorageReader>(
     input: &[u8],
     gas_limit: u64,
     reader: &mut R,
