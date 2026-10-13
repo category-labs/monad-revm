@@ -6,6 +6,7 @@
 //! - No header validation for prevrandao or excess_blob_gas (Monad doesn't use these)
 use revm::{
     context_interface::{
+        context::take_error,
         journaled_state::account::JournaledAccountTr,
         result::{HaltReason, InvalidTransaction},
         transaction::{AuthorizationTr, TransactionType},
@@ -150,6 +151,18 @@ where
         _init_and_floor_gas: &mut InitialAndFloorGas,
     ) -> Result<(), Self::Error> {
         validate_monad_against_state_and_deduct_caller::<_, Self::Error>(evm.ctx())
+    }
+
+    fn last_frame_result(
+        &mut self,
+        evm: &mut Self::Evm,
+        frame_result: &mut FrameResult,
+        parent_gas: &mut GasTracker,
+    ) -> Result<(), Self::Error> {
+        // Direct precompile calls have no parent frame to drain fatal context errors.
+        // Abort before post-execution can pay the beneficiary or mask the original error.
+        take_error::<Self::Error, _>(evm.ctx().error())?;
+        self.mainnet.last_frame_result(evm, frame_result, parent_gas)
     }
 
     // Disable gas refunds
