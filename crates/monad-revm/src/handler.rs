@@ -506,6 +506,11 @@ mod tests {
                 .build_fill();
 
             let result = evm.transact(tx).expect("Transaction should succeed");
+            assert!(
+                result.result.is_success(),
+                "execution with basefee {basefee}: {:?}",
+                result.result
+            );
 
             let caller_balance =
                 result.state.get(&caller).map(|a| a.info.balance).unwrap_or_default();
