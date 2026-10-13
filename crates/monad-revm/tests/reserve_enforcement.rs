@@ -261,12 +261,13 @@ fn nested_revert_restores_reserve_before_outer_completion(
     }
 }
 
+/// Builds a recovered authorization using the authority's account nonce.
 fn authorization(
     authority: Address,
-    nonce: u64,
+    account_nonce: u64,
 ) -> Either<revm::context_interface::transaction::SignedAuthorization, RecoveredAuthorization> {
     Either::Right(RecoveredAuthorization::new_unchecked(
-        Authorization { chain_id: U256::from(1), address: DELEGATE, nonce },
+        Authorization { chain_id: U256::from(1), address: DELEGATE, nonce: account_nonce },
         RecoveredAuthority::Valid(authority),
     ))
 }
