@@ -482,30 +482,48 @@ mod tests {
         let gas_limit = 21_000u64;
         let gas_price = u128::MAX;
 
-        let mut db = InMemoryDB::default();
-        db.insert_account_info(
-            caller,
-            revm::state::AccountInfo { balance: U256::MAX, ..Default::default() },
-        );
-        db.insert_account_info(coinbase, revm::state::AccountInfo::default());
+        // Run the overflow case with and without a base fee: the sender is
+        // charged the full gas price, the beneficiary gets the part above the
+        // base fee, and the base fee part is burned.
+        for basefee in [0u64, 7u64] {
+            let mut db = InMemoryDB::default();
+            db.insert_account_info(
+                caller,
+                revm::state::AccountInfo { balance: U256::MAX, ..Default::default() },
+            );
+            db.insert_account_info(coinbase, revm::state::AccountInfo::default());
 
-        let ctx = monad_context_with_db(db);
-        let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
-        evm.ctx().block.beneficiary = coinbase;
-        evm.ctx().block.basefee = 0;
+            let ctx = monad_context_with_db(db);
+            let mut evm = ctx.build_monad_with_inspector(NoOpInspector {});
+            evm.ctx().block.beneficiary = coinbase;
+            evm.ctx().block.basefee = basefee;
 
-        let tx = TxEnv::builder()
-            .caller(caller)
-            .to(Address::from([3u8; 20]))
-            .gas_limit(gas_limit)
-            .gas_price(gas_price)
-            .build_fill();
+            let tx = TxEnv::builder()
+                .caller(caller)
+                .to(Address::from([3u8; 20]))
+                .gas_limit(gas_limit)
+                .gas_price(gas_price)
+                .build_fill();
 
-        let result = evm.transact(tx).expect("Transaction should succeed");
+            let result = evm.transact(tx).expect("Transaction should succeed");
 
-        let coinbase_balance =
-            result.state.get(&coinbase).map(|a| a.info.balance).unwrap_or_default();
-        assert_eq!(coinbase_balance, U256::from(gas_price) * U256::from(gas_limit));
+            let caller_balance =
+                result.state.get(&caller).map(|a| a.info.balance).unwrap_or_default();
+            let coinbase_balance =
+                result.state.get(&coinbase).map(|a| a.info.balance).unwrap_or_default();
+
+            let gas_limit = U256::from(gas_limit);
+            assert_eq!(
+                caller_balance,
+                U256::MAX - U256::from(gas_price) * gas_limit,
+                "sender debit with basefee {basefee}"
+            );
+            assert_eq!(
+                coinbase_balance,
+                U256::from(gas_price - basefee as u128) * gas_limit,
+                "beneficiary credit with basefee {basefee}"
+            );
+        }
     }
 
     #[test]
