@@ -22,7 +22,7 @@ use alloc::string::String;
 use revm::{
     context::Cfg,
     handler::{EthPrecompiles, PrecompileProvider},
-    interpreter::{CallInputs, InterpreterResult},
+    interpreter::{CallInputs, Gas, InstructionResult, InterpreterResult},
     precompile::{
         bn254, kzg_point_evaluation, secp256r1, Precompile, PrecompileHalt, PrecompileId,
         PrecompileOutput, PrecompileResult, Precompiles,
@@ -306,6 +306,52 @@ fn monad_precompiles(spec: MonadHardfork) -> &'static Precompiles {
         precompiles.extend([secp256r1::P256VERIFY_OSAKA]);
         precompiles
     })
+}
+
+/// Applies EIP-7702 to protocol precompiles before invoking a replaceable provider.
+pub(crate) struct DelegationAwarePrecompiles<'a, P> {
+    pub(crate) inner: &'a mut P,
+    pub(crate) is_delegated: bool,
+}
+
+impl<CTX, P> PrecompileProvider<CTX> for DelegationAwarePrecompiles<'_, P>
+where
+    CTX: MonadContextTr,
+    P: PrecompileProvider<CTX, Output = InterpreterResult>,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: MonadHardfork) -> bool {
+        self.inner.set_spec(spec)
+    }
+
+    fn run(
+        &mut self,
+        context: &mut CTX,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        // Native Monad precompiles have separate delegation restrictions. Only the Ethereum
+        // protocol addresses, including P256VERIFY, execute empty code under EIP-7702.
+        if self.is_delegated
+            && monad_precompiles(context.cfg().spec()).contains(&inputs.bytecode_address)
+        {
+            return Ok(Some(InterpreterResult::new(
+                InstructionResult::Return,
+                Bytes::new(),
+                Gas::new_with_regular_gas_and_reservoir(inputs.gas_limit, inputs.reservoir),
+            )));
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> &AddressSet {
+        self.inner.warm_addresses()
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        self.inner.contains(address)
+    }
 }
 
 impl<CTX> PrecompileProvider<CTX> for MonadPrecompiles

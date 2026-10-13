@@ -17,11 +17,9 @@ use revm::{
     },
     inspector::{Inspector, InspectorEvmTr, InspectorHandler},
     interpreter::{
-        interpreter::EthInterpreter, interpreter_action::FrameInit, FrameInput, GasTracker,
-        InitialAndFloorGas,
+        interpreter::EthInterpreter, interpreter_action::FrameInit, GasTracker, InitialAndFloorGas,
     },
     primitives::{hardfork::SpecId, U256},
-    state::Bytecode,
 };
 
 use crate::chain::MonadChainContext;
@@ -207,19 +205,9 @@ where
         evm: &mut Self::Evm,
         gas: &mut GasTracker,
     ) -> Result<Option<FrameInit>, Self::Error> {
-        let Some(mut frame) = self.mainnet.first_frame_input(evm, gas)? else {
+        let Some(frame) = self.mainnet.first_frame_input(evm, gas)? else {
             return Ok(None);
         };
-
-        if let FrameInput::Call(inputs) = &mut frame.frame_input {
-            let account =
-                &evm.ctx().journal_mut().load_account_with_code(inputs.target_address)?.info;
-            if let Some(delegated_address) =
-                account.code.as_ref().and_then(Bytecode::eip7702_address)
-            {
-                inputs.bytecode_address = delegated_address;
-            }
-        }
 
         if !evm.ctx().journal().preserves_reserve_balance_tracker() {
             let sender = evm.ctx().tx().caller();

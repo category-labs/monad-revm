@@ -6,9 +6,9 @@
 
 use super::resize_memory_mip3;
 use alloc::boxed::Box;
-use core::cmp::{max, min};
+use core::cmp::max;
 use revm::interpreter::{
-    instructions::contract::get_memory_input_and_out_ranges,
+    instructions::contract::{get_memory_input_and_out_ranges, load_acc_and_calc_gas},
     interpreter::Interpreter,
     interpreter_types::{
         InputsTr, InterpreterTypes, LegacyBytecode, LoopControl, MemoryTr, ReturnData, RuntimeFlag,
@@ -134,116 +134,6 @@ fn monad_call_resize_memory(
         usize::MAX
     };
     Ok(offset..offset + len)
-}
-
-/// Calculates CALL gas and loads the code that will execute.
-///
-/// This mirrors revm's CALL account-loading path, but also returns the resolved
-/// bytecode address so EIP-7702 delegation can be observed by Monad precompile
-/// dispatch.
-#[inline]
-fn load_acc_and_calc_gas_with_bytecode_address<H: Host + ?Sized>(
-    context: &mut InstructionContext<'_, H, impl InterpreterTypes>,
-    to: Address,
-    transfers_value: bool,
-    create_empty_account: bool,
-    stack_gas_limit: u64,
-) -> Result<(u64, Bytecode, B256, Address, bool), InstructionResult> {
-    if transfers_value {
-        revm_interpreter::gas!(
-            context.interpreter,
-            context.host.gas_params().transfer_value_cost()
-        );
-    }
-
-    let remaining_gas = context.interpreter.gas.remaining();
-    let spec = context.interpreter.runtime_flag.spec_id();
-    let (gas, state_gas_cost, bytecode, code_hash, bytecode_address) = load_account_delegated(
-        context.host,
-        spec,
-        remaining_gas,
-        to,
-        transfers_value,
-        create_empty_account,
-    )?;
-    let charged_new_account_state_gas = state_gas_cost > 0;
-
-    revm_interpreter::gas!(context.interpreter, gas);
-    revm_interpreter::state_gas!(context.interpreter, state_gas_cost);
-
-    let mut gas_limit =
-        if context.interpreter.runtime_flag.spec_id().is_enabled_in(SpecId::TANGERINE) {
-            let reduced_gas_limit = context
-                .host
-                .gas_params()
-                .call_stipend_reduction(context.interpreter.gas.remaining());
-            min(reduced_gas_limit, stack_gas_limit)
-        } else {
-            stack_gas_limit
-        };
-    revm_interpreter::gas!(context.interpreter, gas_limit);
-
-    if transfers_value {
-        gas_limit = gas_limit.saturating_add(context.host.gas_params().call_stipend());
-    }
-
-    Ok((gas_limit, bytecode, code_hash, bytecode_address, charged_new_account_state_gas))
-}
-
-/// Loads an account and its delegated account, returning executable code and its address.
-#[inline]
-fn load_account_delegated<H: Host + ?Sized>(
-    host: &mut H,
-    spec: SpecId,
-    remaining_gas: u64,
-    address: Address,
-    transfers_value: bool,
-    create_empty_account: bool,
-) -> Result<(u64, u64, Bytecode, B256, Address), LoadError> {
-    let mut cost = 0;
-    let mut state_gas_cost = 0;
-    let is_berlin = spec.is_enabled_in(SpecId::BERLIN);
-    let is_spurious_dragon = spec.is_enabled_in(SpecId::SPURIOUS_DRAGON);
-
-    let additional_cold_cost = host.gas_params().cold_account_additional_cost();
-    let warm_storage_read_cost = host.gas_params().warm_storage_read_cost();
-
-    let skip_cold_load = is_berlin && remaining_gas < additional_cold_cost;
-    let account = host.load_account_info_skip_cold_load(address, true, skip_cold_load)?;
-    if is_berlin && account.is_cold {
-        cost += additional_cold_cost;
-    }
-
-    let mut bytecode = account.code.clone().unwrap_or_default();
-    let mut code_hash = account.code_hash();
-    let mut bytecode_address = address;
-
-    if create_empty_account && account.is_empty {
-        cost += host.gas_params().new_account_cost(is_spurious_dragon, transfers_value);
-        if host.is_amsterdam_eip8037_enabled() && transfers_value {
-            state_gas_cost += host.gas_params().new_account_state_gas();
-        }
-        return Ok((cost, state_gas_cost, bytecode, code_hash, bytecode_address));
-    }
-
-    if let Some(delegated_address) = account.code.as_ref().and_then(Bytecode::eip7702_address) {
-        cost += warm_storage_read_cost;
-        if cost > remaining_gas {
-            return Err(LoadError::ColdLoadSkipped);
-        }
-
-        let skip_cold_load = remaining_gas < cost + additional_cold_cost;
-        let delegated_account =
-            host.load_account_info_skip_cold_load(delegated_address, true, skip_cold_load)?;
-        if delegated_account.is_cold {
-            cost += additional_cold_cost;
-        }
-        bytecode = delegated_account.code.clone().unwrap_or_default();
-        code_hash = delegated_account.code_hash();
-        bytecode_address = delegated_address;
-    }
-
-    Ok((cost, state_gas_cost, bytecode, code_hash, bytecode_address))
 }
 
 // ---------------------------------------------------------------------------
@@ -606,14 +496,8 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let (input, return_memory_offset) =
         call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
-        load_acc_and_calc_gas_with_bytecode_address(
-            &mut context,
-            to,
-            has_transfer,
-            true,
-            local_gas_limit,
-        )?;
+    let (gas_limit, bytecode, bytecode_hash, charged_new_account_state_gas) =
+        load_acc_and_calc_gas(&mut context, to, has_transfer, true, local_gas_limit)?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -621,7 +505,7 @@ pub fn call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: to,
             caller: context.interpreter.input.target_address(),
-            bytecode_address,
+            bytecode_address: to,
             known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(value),
             scheme: CallScheme::Call,
@@ -646,14 +530,8 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let (input, return_memory_offset) =
         call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
-        load_acc_and_calc_gas_with_bytecode_address(
-            &mut context,
-            to,
-            has_transfer,
-            false,
-            local_gas_limit,
-        )?;
+    let (gas_limit, bytecode, bytecode_hash, charged_new_account_state_gas) =
+        load_acc_and_calc_gas(&mut context, to, has_transfer, false, local_gas_limit)?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -661,7 +539,7 @@ pub fn call_code<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.target_address(),
-            bytecode_address,
+            bytecode_address: to,
             known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(value),
             scheme: CallScheme::CallCode,
@@ -686,14 +564,8 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let (input, return_memory_offset) =
         call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
-        load_acc_and_calc_gas_with_bytecode_address(
-            &mut context,
-            to,
-            false,
-            false,
-            local_gas_limit,
-        )?;
+    let (gas_limit, bytecode, bytecode_hash, charged_new_account_state_gas) =
+        load_acc_and_calc_gas(&mut context, to, false, false, local_gas_limit)?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -701,7 +573,7 @@ pub fn delegate_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: context.interpreter.input.target_address(),
             caller: context.interpreter.input.caller_address(),
-            bytecode_address,
+            bytecode_address: to,
             known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Apparent(context.interpreter.input.call_value()),
             scheme: CallScheme::DelegateCall,
@@ -726,14 +598,8 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
     let (input, return_memory_offset) =
         call_memory_input_and_out_ranges(context.interpreter, context.host.gas_params())?;
 
-    let (gas_limit, bytecode, bytecode_hash, bytecode_address, charged_new_account_state_gas) =
-        load_acc_and_calc_gas_with_bytecode_address(
-            &mut context,
-            to,
-            false,
-            false,
-            local_gas_limit,
-        )?;
+    let (gas_limit, bytecode, bytecode_hash, charged_new_account_state_gas) =
+        load_acc_and_calc_gas(&mut context, to, false, false, local_gas_limit)?;
 
     context.interpreter.bytecode.set_action(InterpreterAction::NewFrame(FrameInput::Call(
         Box::new(CallInputs {
@@ -741,7 +607,7 @@ pub fn static_call<WIRE: InterpreterTypes, H: Host + ?Sized>(
             gas_limit,
             target_address: to,
             caller: context.interpreter.input.target_address(),
-            bytecode_address,
+            bytecode_address: to,
             known_bytecode: (bytecode_hash, bytecode),
             value: CallValue::Transfer(U256::ZERO),
             scheme: CallScheme::StaticCall,
