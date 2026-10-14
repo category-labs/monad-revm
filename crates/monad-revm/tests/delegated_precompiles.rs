@@ -3,7 +3,7 @@
 use monad_revm::{
     monad_context_with_db, precompiles::MonadPrecompiles,
     reserve_balance::abi::RESERVE_BALANCE_ADDRESS, staking::STAKING_ADDRESS, MonadBuilder,
-    MonadCfgEnv, MonadContext, MonadHardfork,
+    MonadCfgEnv, MonadContext, MonadHaltReason, MonadHardfork,
 };
 use revm::{
     bytecode::opcode,
@@ -111,7 +111,7 @@ fn execute(
     target: Address,
     call_opcode: u8,
     call_gas: u64,
-) -> (ExecutionResult, CallRecorder) {
+) -> (ExecutionResult<MonadHaltReason>, CallRecorder) {
     let (result, recorder, _) = execute_with_precompiles(
         spec,
         db,
@@ -130,7 +130,7 @@ fn execute_with_precompiles<P>(
     call_opcode: u8,
     call_gas: u64,
     precompiles: P,
-) -> (ExecutionResult, CallRecorder, P)
+) -> (ExecutionResult<MonadHaltReason>, CallRecorder, P)
 where
     P: PrecompileProvider<MonadContext<InMemoryDB>, Output = InterpreterResult>,
 {
@@ -161,7 +161,12 @@ where
     (result, evm.0.inspector, evm.0.precompiles)
 }
 
-fn assert_output(result: &ExecutionResult, call_opcode: u8, success: bool, data: &[u8]) {
+fn assert_output(
+    result: &ExecutionResult<MonadHaltReason>,
+    call_opcode: u8,
+    success: bool,
+    data: &[u8],
+) {
     if call_opcode == 0 {
         assert_eq!(result.is_success(), success);
         assert_eq!(result.output().unwrap().as_ref(), data);
@@ -268,6 +273,92 @@ fn delegated_contract_can_call_identity_directly(
     let (inputs, outcome) = &recorder.ended[0];
     assert_eq!(outcome.result.gas.total_gas_spent(), 18);
     assert_eq!(outcome.result.gas.remaining(), inputs.gas_limit - 18);
+}
+
+#[derive(Default)]
+struct RootInputRecorder {
+    started: Option<CallInputs>,
+    ended: Option<(CallInputs, CallOutcome, U256)>,
+}
+
+impl Inspector<MonadContext<InMemoryDB>> for RootInputRecorder {
+    fn call(
+        &mut self,
+        _context: &mut MonadContext<InMemoryDB>,
+        inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        assert!(self.started.replace(inputs.clone()).is_none());
+        None
+    }
+
+    fn call_end(
+        &mut self,
+        context: &mut MonadContext<InMemoryDB>,
+        inputs: &CallInputs,
+        outcome: &mut CallOutcome,
+    ) {
+        let balance = context.journaled_state.state[&AUTHORITY].info.balance;
+        assert!(self.ended.replace((inputs.clone(), outcome.clone(), balance)).is_none());
+    }
+}
+
+#[rstest]
+fn delegated_root_callbacks_keep_completed_inputs_and_reserve_outcome(
+    #[values(false, true)] precompile: bool,
+    #[values(false, true)] protected: bool,
+) {
+    let mon = U256::from(10).pow(U256::from(18));
+    let target = if precompile { u64_to_address(4) } else { PROXY };
+    let mut db = funded_db();
+    db.insert_account_info(
+        SENDER,
+        AccountInfo { balance: mon * U256::from(12), ..Default::default() },
+    );
+    db.insert_account_info(
+        AUTHORITY,
+        AccountInfo::default().with_code(Bytecode::new_eip7702(target)),
+    );
+    db.insert_account_info(
+        PROXY,
+        AccountInfo::default().with_code(Bytecode::new_raw(
+            vec![opcode::PUSH1, 1, opcode::PUSH0, opcode::RETURN].into(),
+        )),
+    );
+    let mut context = monad_context_with_db(db);
+    context.block.basefee = 0;
+    if protected {
+        context.chain.parent_senders_and_authorities.insert(SENDER);
+    }
+    let mut evm = context.build_monad_with_inspector(RootInputRecorder::default());
+    let result = evm
+        .inspect_one_tx(
+            TxEnv::builder()
+                .caller(SENDER)
+                .to(AUTHORITY)
+                .value(mon * U256::from(3))
+                .gas_limit(CALL_GAS)
+                .gas_price(1)
+                .build_fill(),
+        )
+        .unwrap();
+    let recorder = &evm.0.inspector;
+    assert_eq!(recorder.started.as_ref().unwrap().bytecode_address, AUTHORITY);
+    let (inputs, outcome, balance) = recorder.ended.as_ref().unwrap();
+    // Immediate results retain the input clone; executed frames expose their resolved input.
+    assert_eq!(inputs.bytecode_address, if precompile { AUTHORITY } else { target });
+    assert_eq!(inputs.target_address, AUTHORITY);
+    assert_eq!(*balance, if protected { U256::ZERO } else { mon * U256::from(3) });
+    if protected {
+        assert!(matches!(
+            result,
+            ExecutionResult::Halt { reason: MonadHaltReason::ReserveBalanceViolation, .. }
+        ));
+        assert_eq!(outcome.result.result, InstructionResult::Revert);
+    } else {
+        assert!(result.is_success());
+        assert!(outcome.result.result.is_ok());
+    }
+    assert_eq!(outcome.result.output.as_ref(), if precompile { &[][..] } else { &[0][..] });
 }
 
 #[rstest]

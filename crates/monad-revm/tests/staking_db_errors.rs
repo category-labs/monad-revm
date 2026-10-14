@@ -14,7 +14,7 @@ use monad_revm::{
         write::{run_staking_write, StakingStorage},
         StorageReader, STAKING_ADDRESS,
     },
-    MonadBuilder, MonadCfgEnv, MonadHardfork,
+    MonadBuilder, MonadCfgEnv, MonadContext, MonadHaltReason, MonadHardfork, MonadJournalTr,
 };
 use revm::{
     bytecode::opcode,
@@ -25,13 +25,15 @@ use revm::{
     context_interface::{ContextError, ContextTr, JournalTr},
     database::InMemoryDB,
     database_interface::DBErrorMarker,
-    handler::{system_call::SystemCallEvm, EvmTr},
+    handler::{system_call::SystemCallEvm, EvmTr, FrameResult},
     inspector::{InspectCommitEvm, InspectEvm, NoOpInspector},
-    interpreter::{CallInput, CallInputs, CallScheme, CallValue},
+    interpreter::{
+        CallInput, CallInputs, CallOutcome, CallScheme, CallValue, FrameInput, InstructionResult,
+    },
     precompile::PrecompileHalt,
     primitives::{Address, Log, B256, U256},
     state::{AccountInfo, Bytecode, EvmState},
-    Database, DatabaseCommit, ExecuteCommitEvm, ExecuteEvm,
+    Database, DatabaseCommit, ExecuteCommitEvm, ExecuteEvm, Inspector,
 };
 use rstest::rstest;
 use std::{collections::BTreeMap, fmt, sync::Arc};
@@ -248,6 +250,145 @@ fn database_failure_aborts_transaction(
         evm.ctx().db().inner.cache.accounts[&sender].info.balance,
         MON - U256::from(GAS_LIMIT)
     );
+}
+
+#[derive(Default)]
+struct FatalErrorInspector {
+    outcomes: Vec<(InstructionResult, bool)>,
+    frame_outcomes: Vec<(InstructionResult, bool)>,
+    edit_outcome: bool,
+}
+
+impl Inspector<MonadContext<FailingDb>> for FatalErrorInspector {
+    fn call_end(
+        &mut self,
+        context: &mut MonadContext<FailingDb>,
+        _inputs: &CallInputs,
+        outcome: &mut CallOutcome,
+    ) {
+        let pending_error = context.error().is_err();
+        self.outcomes.push((outcome.result.result, pending_error));
+        if pending_error && self.edit_outcome {
+            outcome.result.result = InstructionResult::Return;
+        }
+    }
+
+    fn frame_end(
+        &mut self,
+        context: &mut MonadContext<FailingDb>,
+        _inputs: &FrameInput,
+        outcome: &mut FrameResult,
+    ) {
+        self.frame_outcomes.push((outcome.instruction_result(), context.error().is_err()));
+    }
+}
+
+#[rstest]
+fn database_failure_takes_precedence_over_reserve_violation(
+    #[values(false, true)] inspect: bool,
+    #[values(false, true)] nested: bool,
+    #[values(false, true)] edit_outcome: bool,
+) {
+    let initial_balance = MON * U256::from(12);
+    let marker = Arc::new(());
+    let failure_key =
+        if nested { global_slots::EPOCH } else { validator_key(1, validator_offsets::STAKE) };
+    let target = if nested { PROXY } else { STAKING_ADDRESS };
+    let mut db = FailingDb {
+        storage_failure: Some((failure_key, DbFailure(marker.clone()))),
+        ..Default::default()
+    };
+    db.inner.insert_account_info(
+        SENDER,
+        AccountInfo { balance: initial_balance, ..Default::default() },
+    );
+    db.inner.insert_account_info(PROXY, AccountInfo::default().with_code(catch_staking_failure()));
+    let mut context = monad_context_with_db(db);
+    context.block.basefee = 0;
+    context.block.beneficiary = BENEFICIARY;
+    context.chain.parent_senders_and_authorities.insert(SENDER);
+    let mut evm = context
+        .build_monad_with_inspector(FatalErrorInspector { edit_outcome, ..Default::default() });
+    let data = if nested {
+        getEpochCall {}.abi_encode()
+    } else {
+        delegateCall { validatorId: 1 }.abi_encode()
+    };
+    let mut tx = TxEnv::builder()
+        .caller(SENDER)
+        .to(target)
+        .value(MON * U256::from(3))
+        .data(data.into())
+        .gas_limit(GAS_LIMIT)
+        .gas_price(1)
+        .build_fill();
+
+    // The initial transfer crosses the reserve before the staking read fails.
+    let outcome =
+        if inspect { evm.inspect_tx_commit(tx.clone()) } else { evm.transact_commit(tx.clone()) };
+    let Err(EVMError::Database(DbFailure(original))) = outcome else {
+        panic!("database failure must take precedence, got {outcome:?}");
+    };
+    assert!(Arc::ptr_eq(&original, &marker));
+    if inspect {
+        assert_eq!(evm.0.inspector.outcomes, [(InstructionResult::FatalExternalError, true)]);
+        let expected = if edit_outcome {
+            InstructionResult::Return
+        } else {
+            InstructionResult::FatalExternalError
+        };
+        assert_eq!(evm.0.inspector.frame_outcomes, [(expected, true)]);
+    } else {
+        assert!(evm.0.inspector.outcomes.is_empty());
+        assert!(evm.0.inspector.frame_outcomes.is_empty());
+    }
+    assert_eq!(evm.ctx().db().commits, 0);
+    assert_eq!(evm.ctx().db().inner.cache.accounts[&SENDER].info.balance, initial_balance);
+    assert_eq!(evm.ctx().db().inner.cache.accounts[&SENDER].info.nonce, 0);
+    assert_eq!(evm.ctx().db().inner.cache.accounts[&target].info.balance, U256::ZERO);
+    assert!(evm.ctx().journal().evm_state().values().all(|account| !account.is_touched()));
+    assert!(evm.ctx().error().is_ok());
+    assert_eq!(evm.ctx().journal().depth(), 0);
+    assert!(!evm.ctx().journal().reserve_balance().tracking_enabled());
+    assert!(!evm.ctx().journal().reserve_balance().has_violation());
+
+    // Retrying after the database recovers now rejects only the execution effects.
+    let result = if inspect {
+        evm.inspect_tx_commit(tx.clone()).unwrap()
+    } else {
+        evm.transact_commit(tx.clone()).unwrap()
+    };
+    assert!(matches!(
+        result,
+        ExecutionResult::Halt { reason: MonadHaltReason::ReserveBalanceViolation, .. }
+    ));
+    let db = evm.ctx_ref().db();
+    assert_eq!(db.commits, 1);
+    assert_eq!(
+        db.inner.cache.accounts[&SENDER].info.balance,
+        initial_balance - U256::from(GAS_LIMIT)
+    );
+    assert_eq!(db.inner.cache.accounts[&SENDER].info.nonce, 1);
+    assert_eq!(db.inner.cache.accounts[&BENEFICIARY].info.balance, U256::from(GAS_LIMIT));
+    assert_eq!(db.inner.cache.accounts[&target].info.balance, U256::ZERO);
+    assert!(db.inner.cache.accounts[&target].storage.values().all(U256::is_zero));
+
+    // Neither failure may leak into the next valid transaction on the same EVM.
+    tx.value = U256::ZERO;
+    tx.nonce = 1;
+    tx.data = getEpochCall {}.abi_encode().into();
+    let result =
+        if inspect { evm.inspect_tx_commit(tx).unwrap() } else { evm.transact_commit(tx).unwrap() };
+    assert!(result.is_success());
+    assert_eq!(evm.ctx().db().commits, 2);
+    assert_eq!(evm.ctx().db().inner.cache.accounts[&SENDER].info.nonce, 2);
+    assert_eq!(
+        evm.ctx().db().inner.cache.accounts[&SENDER].info.balance,
+        initial_balance - U256::from(2 * GAS_LIMIT)
+    );
+    if nested {
+        assert_eq!(evm.ctx().db().inner.cache.accounts[&PROXY].storage[&U256::ZERO], U256::from(1));
+    }
 }
 
 #[rstest]
