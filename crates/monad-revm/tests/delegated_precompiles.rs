@@ -30,16 +30,28 @@ const CALL_GAS: u64 = 100_000;
 const CALLDATA: &[u8] = b"hello";
 
 #[derive(Debug, Default)]
-struct CallRecorder(Vec<(CallInputs, CallOutcome)>);
+struct CallRecorder {
+    started: Vec<CallInputs>,
+    ended: Vec<(CallInputs, CallOutcome)>,
+}
 
 impl Inspector<MonadContext<InMemoryDB>> for CallRecorder {
+    fn call(
+        &mut self,
+        _context: &mut MonadContext<InMemoryDB>,
+        inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        self.started.push(inputs.clone());
+        None
+    }
+
     fn call_end(
         &mut self,
         _context: &mut MonadContext<InMemoryDB>,
         inputs: &CallInputs,
         outcome: &mut CallOutcome,
     ) {
-        self.0.push((inputs.clone(), outcome.clone()));
+        self.ended.push((inputs.clone(), outcome.clone()));
     }
 }
 
@@ -161,6 +173,12 @@ fn assert_output(result: &ExecutionResult, call_opcode: u8, success: bool, data:
     }
 }
 
+fn assert_inspector_addresses(recorder: &CallRecorder, call_opcode: u8, target: Address) {
+    let addresses =
+        recorder.started.iter().map(|inputs| inputs.bytecode_address).collect::<Vec<_>>();
+    assert_eq!(addresses, if call_opcode == 0 { vec![target] } else { vec![PROXY, target] });
+}
+
 #[rstest]
 fn delegated_ethereum_precompiles_execute_empty_code(
     #[values(
@@ -181,10 +199,11 @@ fn delegated_ethereum_precompiles_execute_empty_code(
             AccountInfo::default().with_code(Bytecode::new_eip7702(*target)),
         );
         let (result, recorder) = execute(spec, db, AUTHORITY, call_opcode, call_gas);
+        assert_inspector_addresses(&recorder, call_opcode, AUTHORITY);
         assert_output(&result, call_opcode, true, &[]);
 
         // Canonical delegated precompiles return empty success with all msg.gas remaining.
-        let (inputs, outcome) = &recorder.0[0];
+        let (inputs, outcome) = &recorder.ended[0];
         assert!(outcome.result.result.is_ok(), "target {target}");
         assert!(outcome.result.output.is_empty(), "target {target}");
         assert_eq!(outcome.result.gas.remaining(), inputs.gas_limit, "target {target}");
@@ -216,8 +235,9 @@ fn direct_identity_precompile_still_executes(
     call_opcode: u8,
 ) {
     let (result, recorder) = execute(spec, funded_db(), u64_to_address(4), call_opcode, CALL_GAS);
+    assert_inspector_addresses(&recorder, call_opcode, u64_to_address(4));
     assert_output(&result, call_opcode, true, CALLDATA);
-    let (inputs, outcome) = &recorder.0[0];
+    let (inputs, outcome) = &recorder.ended[0];
     assert_eq!(outcome.result.gas.total_gas_spent(), 18);
     assert_eq!(outcome.result.gas.remaining(), inputs.gas_limit - 18);
 }
@@ -245,7 +265,7 @@ fn delegated_contract_can_call_identity_directly(
     );
     let (result, recorder) = execute(spec, db, AUTHORITY, 0, CALL_GAS);
     assert_output(&result, call_opcode, true, CALLDATA);
-    let (inputs, outcome) = &recorder.0[0];
+    let (inputs, outcome) = &recorder.ended[0];
     assert_eq!(outcome.result.gas.total_gas_spent(), 18);
     assert_eq!(outcome.result.gas.remaining(), inputs.gas_limit - 18);
 }
@@ -271,7 +291,7 @@ fn delegation_chain_to_precompile_is_not_followed(
     } else {
         assert_output(&result, call_opcode, false, &[]);
     }
-    assert!(recorder.0[0].1.result.result.is_halt());
+    assert!(recorder.ended[0].1.result.result.is_halt());
 }
 
 #[derive(Debug)]
@@ -280,6 +300,7 @@ struct CustomPrecompiles {
     addresses: AddressSet,
     removed: bool,
     executions: usize,
+    called_addresses: Vec<Address>,
 }
 
 impl PrecompileProvider<MonadContext<InMemoryDB>> for CustomPrecompiles {
@@ -294,6 +315,7 @@ impl PrecompileProvider<MonadContext<InMemoryDB>> for CustomPrecompiles {
         _context: &mut MonadContext<InMemoryDB>,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
+        self.called_addresses.push(inputs.bytecode_address);
         if inputs.bytecode_address != self.address || self.removed {
             return Ok(None);
         }
@@ -338,17 +360,25 @@ fn custom_providers_observe_protocol_delegation_rules(
         addresses: if removed { AddressSet::default() } else { [address].into_iter().collect() },
         removed,
         executions: 0,
+        called_addresses: Vec::new(),
     };
+    let target = if delegated { AUTHORITY } else { address };
     let (result, recorder, provider) = execute_with_precompiles(
         MonadHardfork::MonadTen,
         db,
-        if delegated { AUTHORITY } else { address },
+        target,
         call_opcode,
         CALL_GAS,
         provider,
     );
+    assert_inspector_addresses(&recorder, call_opcode, target);
 
     let suppressed = protocol_address && delegated;
+    let mut provider_addresses = if call_opcode == 0 { Vec::new() } else { vec![PROXY] };
+    if !suppressed {
+        provider_addresses.push(address);
+    }
+    assert_eq!(provider.called_addresses, provider_addresses);
     let executed = !suppressed && !removed;
     assert_output(
         &result,
@@ -358,7 +388,7 @@ fn custom_providers_observe_protocol_delegation_rules(
     );
     assert_eq!(provider.executions, usize::from(executed));
     assert_eq!(
-        recorder.0[0].1.result.gas.total_gas_spent(),
+        recorder.ended[0].1.result.gas.total_gas_spent(),
         if suppressed {
             0
         } else if removed {
@@ -404,7 +434,7 @@ fn authorization_installed_by_transaction_suppresses_precompile(
         result.state[&AUTHORITY].info.code.as_ref().unwrap().eip7702_address(),
         Some(identity)
     );
-    assert_eq!(evm.0.inspector.0[0].1.result.gas.total_gas_spent(), 0);
+    assert_eq!(evm.0.inspector.ended[0].1.result.gas.total_gas_spent(), 0);
 }
 
 #[test]
@@ -469,7 +499,7 @@ fn top_level_delegated_identity_preserves_value_without_execution_gas(
     assert_eq!(result.result.tx_gas_used(), 21_000);
     assert_eq!(result.state[&AUTHORITY].info.balance, U256::from(1));
     assert_eq!(result.state[&identity].info.balance, U256::ZERO);
-    let (inputs, outcome) = &evm.0.inspector.0[0];
+    let (inputs, outcome) = &evm.0.inspector.ended[0];
     assert_eq!(inputs.gas_limit, 0);
     assert_eq!(outcome.result.gas.remaining(), 0);
     assert_eq!(outcome.result.gas.total_gas_spent(), 0);
@@ -496,6 +526,6 @@ fn delegated_native_precompiles_keep_their_restrictions(
     let (result, recorder) = execute(spec, db, AUTHORITY, call_opcode, CALL_GAS);
     let active = target == STAKING_ADDRESS || spec != MonadHardfork::MonadEight;
     assert_output(&result, call_opcode, !active, &[]);
-    let (inputs, outcome) = &recorder.0[0];
+    let (inputs, outcome) = &recorder.ended[0];
     assert_eq!(outcome.result.gas.remaining(), if active { 0 } else { inputs.gas_limit });
 }
