@@ -18,8 +18,7 @@ use revm::{
         MainnetHandler,
     },
     interpreter::{
-        interpreter_action::FrameInit, FrameInput, GasTracker, InitialAndFloorGas,
-        InstructionResult,
+        interpreter_action::FrameInit, GasTracker, InitialAndFloorGas, InstructionResult,
     },
     primitives::{hardfork::SpecId, U256},
 };
