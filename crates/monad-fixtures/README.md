@@ -128,6 +128,34 @@ cases exits successfully but still reports every unsupported case and its reason
 
 ## Development
 
+### Continuous integration
+
+The `execution fixtures` CI job runs the checked-in corpus from
+[`monad-execution-specs` at `12e2c05`](https://github.com/category-labs/monad-execution-specs/tree/12e2c05bcfa6daeef9c0f4c54c5c7a13fde39e89/test/execution/fixtures/blockchain_tests)
+on every pull request and push to `main`. It uploads the raw JSON report and writes a
+job summary, including when the fixture check fails.
+
+The gate requires all 227 results: 226 passes and the known `highGasUsage` failure.
+That exception matches the exact fixture file, case name, network, block index, receipt
+roots, and reserve-violation outcome. Any other failure, unsupported case, missing or
+duplicate result, unexpected pass, or changed diagnostic fails the job. The report
+retains the failure status; the CLI's normal exit codes are unchanged.
+
+The spec revision is pinned in `.github/workflows/ci.yml`. When updating it, review the
+report and the acceptance policy in `.github/scripts/fixture_ci.py` together.
+To reproduce the gate with that spec checkout locally:
+
+```bash
+cargo build -p monad-fixtures
+python3 .github/scripts/fixture_ci.py \
+  --runner target/debug/monad-fixtures \
+  --fixtures ../monad-execution-specs/test/execution/fixtures/blockchain_tests \
+  --report target/fixture-report.json
+python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+```
+
+### Runner tests
+
 ```bash
 cargo test -p monad-fixtures
 cargo clippy -p monad-fixtures --all-targets -- -D warnings
