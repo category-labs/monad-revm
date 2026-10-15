@@ -27,14 +27,14 @@ const BENEFICIARY: Address = address!("3333333333333333333333333333333333333333"
 const INITIAL_BALANCE: u128 = 20_000_000_000_000_000_000;
 const SECRET: B256 = b256!("0101010101010101010101010101010101010101010101010101010101010101");
 
-fn signed_transfer(nonce: u64) -> TxEnvelope {
-    signed_transfer_with_price(nonce, 3)
+fn signed_transfer(sequence: u64) -> TxEnvelope {
+    signed_transfer_with_price(sequence, 3)
 }
 
-fn signed_transfer_with_price(nonce: u64, gas_price: u128) -> TxEnvelope {
+fn signed_transfer_with_price(sequence: u64, gas_price: u128) -> TxEnvelope {
     let tx = TxLegacy {
         chain_id: Some(143),
-        nonce,
+        nonce: sequence,
         gas_price,
         gas_limit: 50_000,
         to: TxKind::Call(RECIPIENT),
@@ -45,8 +45,8 @@ fn signed_transfer_with_price(nonce: u64, gas_price: u128) -> TxEnvelope {
     tx.into_signed(signature).into()
 }
 
-fn account(nonce: u64, balance: u128, code: &str) -> Value {
-    json!({"nonce": nonce, "balance": balance.to_string(), "code": code, "storage": {}})
+fn account(sequence: u64, balance: u128, code: &str) -> Value {
+    json!({"nonce": sequence, "balance": balance.to_string(), "code": code, "storage": {}})
 }
 
 fn root(alloc: &Value) -> B256 {
