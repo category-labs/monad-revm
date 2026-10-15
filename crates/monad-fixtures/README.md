@@ -71,9 +71,9 @@ receipt. A transaction rejected before execution, a malformed input, or a mismat
 expectation is a runner failure. These results require investigation; a failure alone
 does not identify whether the runner, fixture, or execution implementation is wrong.
 
-The [compatibility investigation](TRIAGE.md) records the first corpus comparison: the
-15 original failures were resolved by existing reserve-enforcement changes on `main`.
-One documented OCaml/C++ disagreement, `highGasUsage`, remains a reported failure.
+`highGasUsage_MONAD_EIGHT` exercises a
+[known reserve-check difference between the execution client, OCaml spec, and Foundation spec](https://github.com/category-labs/monad-execution-specs/blob/12e2c05bcfa6daeef9c0f4c54c5c7a13fde39e89/lib/reserve_balance.ml#L54-L68).
+`monad-revm` follows the C++ execution behavior, so the runner reports this fixture as failed.
 
 ## Supported scope and exclusions
 
