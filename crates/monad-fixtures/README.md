@@ -71,6 +71,10 @@ receipt. A transaction rejected before execution, a malformed input, or a mismat
 expectation is a runner failure. These results require investigation; a failure alone
 does not identify whether the runner, fixture, or execution implementation is wrong.
 
+The [compatibility investigation](TRIAGE.md) records the first corpus comparison: the
+15 original failures were resolved by existing reserve-enforcement changes on `main`.
+One documented OCaml/C++ disagreement, `highGasUsage`, remains a reported failure.
+
 ## Supported scope and exclusions
 
 The first version accepts blockchain fixtures for `MONAD_EIGHT` and `MONAD_NINE`, plus
