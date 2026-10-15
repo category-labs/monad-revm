@@ -28,10 +28,14 @@ const INITIAL_BALANCE: u128 = 20_000_000_000_000_000_000;
 const SECRET: B256 = b256!("0101010101010101010101010101010101010101010101010101010101010101");
 
 fn signed_transfer(nonce: u64) -> TxEnvelope {
+    signed_transfer_with_price(nonce, 3)
+}
+
+fn signed_transfer_with_price(nonce: u64, gas_price: u128) -> TxEnvelope {
     let tx = TxLegacy {
         chain_id: Some(143),
         nonce,
-        gas_price: 3,
+        gas_price,
         gas_limit: 50_000,
         to: TxKind::Call(RECIPIENT),
         value: U256::from(7),
@@ -178,6 +182,74 @@ fn transfer() -> Value {
     fixture("MONAD_EIGHT", "0x00", true, 1, false, false)
 }
 
+fn reserve_fixture(
+    network: &str,
+    initial_balance: u128,
+    gas_price: u128,
+    outcomes: &[&[bool]],
+) -> Value {
+    let mut case = fixture(network, "0x00", true, 0, false, false);
+    let sender = signed_transfer(0).recover_signer().unwrap().to_string();
+    case["pre"][&sender]["balance"] = json!(initial_balance.to_string());
+    let mut genesis = alloy_rlp::decode_exact::<Header>(
+        &hex::decode(case["genesisRLP"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    genesis.state_root = root(&case["pre"]);
+    case["genesisBlockHeader"] = header_json(&genesis);
+    case["genesisRLP"] = json!(hex::encode_prefixed(alloy_rlp::encode(&genesis)));
+    let mut parent = genesis.clone();
+    let mut post = case["pre"].clone();
+    let mut nonce = 0;
+    let mut sent = 0;
+    for (index, expected) in outcomes.iter().enumerate() {
+        let mut transactions = Vec::new();
+        let mut receipts = Vec::new();
+        let mut gas_used = 0;
+        for succeeds in *expected {
+            let tx = signed_transfer_with_price(nonce, gas_price);
+            gas_used += tx.gas_limit();
+            nonce += 1;
+            if *succeeds {
+                sent += 7;
+            }
+            // Reserve rejection preserves full fees and nonce, but rolls back the value transfer.
+            post[&sender] = account(
+                nonce,
+                initial_balance - u128::from(nonce) * 50_000 * gas_price - sent,
+                "0x",
+            );
+            post[RECIPIENT.to_string()] = account(1, sent, "0x00");
+            post[BENEFICIARY.to_string()] =
+                account(0, u128::from(nonce) * 50_000 * (gas_price - 1), "0x");
+            let receipt =
+                Receipt { status: (*succeeds).into(), cumulative_gas_used: gas_used, logs: vec![] }
+                    .with_bloom();
+            receipts.push(ReceiptEnvelope::from_typed(TxType::Legacy, receipt));
+            transactions.push(tx);
+        }
+        let header = Header {
+            parent_hash: parent.hash_slow(),
+            number: index as u64 + 1,
+            timestamp: (index as u64 + 1) * 15,
+            gas_used,
+            state_root: root(&post),
+            transactions_root: calculate_transaction_root(&transactions),
+            receipts_root: calculate_receipt_root(&receipts),
+            ..genesis.clone()
+        };
+        let block = Block::new(
+            header.clone(),
+            BlockBody { transactions, ommers: vec![], withdrawals: Some(Default::default()) },
+        );
+        case["blocks"].as_array_mut().unwrap().push(block_json(&block));
+        parent = header;
+    }
+    case["lastblockhash"] = json!(parent.hash_slow());
+    case["postState"] = post;
+    case
+}
+
 fn write_cases(path: &Path, cases: Value) {
     fs::write(path, serde_json::to_vec(&cases).unwrap()).unwrap();
 }
@@ -276,6 +348,46 @@ fn replays_typed_transactions_and_authorizations() {
         });
         let report = check(case);
         assert_eq!(report.cases[0].status, Status::Passed, "{report:?}");
+    }
+}
+
+#[test]
+fn enforces_reserves_with_current_and_historical_senders() {
+    let histories: &[&[&[bool]]] = &[
+        &[&[true, false]],
+        &[&[true], &[false]],
+        &[&[true], &[], &[false]],
+        &[&[true], &[], &[], &[true]],
+    ];
+    for network in ["MONAD_EIGHT", "MONAD_NINE"] {
+        for history in histories {
+            let report = check(reserve_fixture(network, 1_000_000, 3, history));
+            assert_eq!(report.cases[0].status, Status::Passed, "{network} {history:?}: {report:?}");
+        }
+    }
+}
+
+#[test]
+fn reports_high_fee_spec_divergence_as_a_failure() {
+    for network in ["MONAD_EIGHT", "MONAD_NINE"] {
+        // Each fee is 10.2 MON: the first transaction may empty reserves, the second may not.
+        let report = check(reserve_fixture(
+            network,
+            100_000_000_000_000_000_000,
+            204_000_000_000_000,
+            &[&[true], &[false]],
+        ));
+        assert_eq!(report.cases[0].status, Status::Passed, "{network}: {report:?}");
+        // The OCaml specification instead permits the second transaction even above the reserve.
+        let report = check(reserve_fixture(
+            network,
+            100_000_000_000_000_000_000,
+            204_000_000_000_000,
+            &[&[true], &[true]],
+        ));
+        assert_eq!(report.cases[0].status, Status::Failed, "{network}: {report:?}");
+        assert!(report.cases[0].message.contains("receipts root mismatch"), "{report:?}");
+        assert!(report.cases[0].message.contains("ReserveBalanceViolation"), "{report:?}");
     }
 }
 
