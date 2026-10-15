@@ -366,11 +366,35 @@ let context = monad_context_with_db(db);
 let mut evm = context.build_monad();
 ```
 
+## Blockchain fixture runner
+
+The `monad-fixtures` CLI replays blockchain JSON fixtures through `monad-revm` and reports
+each case as passed, failed, or unsupported:
+
+```bash
+cargo run -p monad-fixtures -- \
+  ../monad-execution-specs/test/execution/fixtures/blockchain_tests
+
+cargo run -p monad-fixtures -- \
+  ../monad-execution-specs/test/execution/fixtures/blockchain_tests \
+  --filter sstoreGasCosts --json
+```
+
+The initial scope is valid-block execution for `MONAD_EIGHT` and `MONAD_NINE`, including
+state roots, receipts, logs, full gas-limit accounting, and final account assertions.
+A pass covers those execution checks; it does not establish full node or consensus parity.
+See the [runner guide](crates/monad-fixtures/README.md) for fixture requirements, unsupported
+cases, JSON output, and exit codes.
+
 ## Architecture
 
 ```text
 monad-revm/
 ├── crates/
+│   ├── monad-fixtures/
+│   │   ├── src/
+│   │   ├── tests/
+│   │   └── README.md
 │   └── monad-revm/
 │       ├── Cargo.toml
 │       ├── LICENSE

@@ -1,0 +1,29 @@
+[package]
+name = "monad-fixtures"
+description = "Monad blockchain fixture runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+monad-revm = { workspace = true, features = ["std", "c-kzg", "secp256k1", "portable", "blst", "memory_limit"] }
+revm = { workspace = true, features = ["std"] }
+alloy-consensus = { version = "=2.0.4", features = ["secp256k1"] }
+alloy-primitives = "1.5.2"
+alloy-rlp = "0.3"
+alloy-trie = { version = "0.9", features = ["ethereum"] }
+clap = { version = "4", features = ["derive"] }
+eyre = "0.6"
+serde.workspace = true
+serde_json = "1"
+walkdir = "2"
+
+[dev-dependencies]
+alloy-eips = "=2.0.4"
+alloy-primitives = { version = "1.5.2", features = ["serde"] }
+tempfile = "3"
