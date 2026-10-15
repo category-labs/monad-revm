@@ -524,6 +524,39 @@ fn frame_initialization_failure_precedes_reserve_enforcement() {
 }
 
 #[rstest]
+fn fees_above_reserve_reject_nonemptying_transactions(
+    #[values(MonadHardfork::MonadEight, MonadHardfork::MonadNine)] spec: MonadHardfork,
+    #[values(false, true)] inspect: bool,
+    #[values(false, true)] protected: bool,
+    #[values(10_000_000_000_000, 10_200_000_000_000)] gas_price: u128,
+) {
+    let mut evm = evm(spec, protected);
+    let tx = TxEnv::builder()
+        .caller(SENDER)
+        .to(RECIPIENT)
+        .gas_limit(GAS_LIMIT)
+        .gas_price(gas_price)
+        .build_fill();
+    let out = execute(&mut evm, tx, inspect);
+    let fee = U256::from(GAS_LIMIT) * U256::from(gas_price);
+
+    // The canonical client rejects fees above reserve even when the sender remains solvent.
+    if protected && fee > mon(10) {
+        assert!(matches!(
+            out.result,
+            ExecutionResult::Halt { reason: MonadHaltReason::ReserveBalanceViolation, .. }
+        ));
+    } else {
+        assert!(out.result.is_success(), "unexpected result: {:?}", out.result);
+    }
+    assert_eq!(out.state[&SENDER].info.balance, mon(12) - fee);
+    assert_eq!(out.state[&SENDER].info.nonce, 1);
+    assert_eq!(out.state[&BENEFICIARY].info.balance, fee);
+    assert!(out.result.logs().is_empty());
+    assert_eq!(out.result.gas().inner_refunded(), 0);
+}
+
+#[rstest]
 fn creation_nonce_overflow_precedes_reserve_enforcement(#[values(false, true)] inspect: bool) {
     let mut evm = evm(MonadHardfork::MonadTen, true);
     evm.0.ctx.cfg.disable_nonce_check = true;
