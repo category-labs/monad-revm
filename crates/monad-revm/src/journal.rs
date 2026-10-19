@@ -57,6 +57,7 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 
     /// Records a frame's CALLER value at its zero-based depth for MIP-18.
     ///
+    /// Called by the EVM only when MIP-18 is active (`MonadNext`).
     /// Entries are overwritten on frame entry, not reverted with state checkpoints. Only
     /// depths at or below the executing frame may be read. Clear entries at transaction end.
     fn set_call_frame_sender(&mut self, depth: usize, sender: Address);
@@ -601,13 +602,22 @@ fn reverted_addresses_from_entry(entry: &JournalEntry) -> Vec<Address> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reserve_balance::tracker::ReserveBalanceInit, MonadChainContext, MonadHardfork};
+    use crate::{
+        monad_context_with_db, reserve_balance::tracker::ReserveBalanceInit, MonadBuilder,
+        MonadCfgEnv, MonadChainContext, MonadContext, MonadHardfork,
+    };
     use revm::{
+        bytecode::opcode,
+        context::TxEnv,
         context_interface::journaled_state::JournalCheckpoint,
         database::{EmptyDB, InMemoryDB},
+        inspector::InspectEvm,
+        interpreter::Interpreter,
         primitives::address,
         state::AccountInfo,
+        Inspector,
     };
+    use rstest::rstest;
 
     fn journal_with_account(spec: MonadHardfork, address: Address) -> MonadJournal<InMemoryDB> {
         let mut db = InMemoryDB::default();
@@ -618,6 +628,57 @@ mod tests {
         journal.set_spec_id(spec.into());
         journal.load_account(address).expect("account should load");
         journal
+    }
+
+    #[derive(Debug, Default)]
+    struct CallerSnapshots(Vec<Vec<Address>>);
+
+    impl Inspector<MonadContext<InMemoryDB>> for CallerSnapshots {
+        fn initialize_interp(&mut self, _: &mut Interpreter, ctx: &mut MonadContext<InMemoryDB>) {
+            self.0.push(ctx.journaled_state.call_frame_senders.clone());
+        }
+    }
+
+    #[rstest]
+    #[case(MonadHardfork::MonadEight, false)]
+    #[case(MonadHardfork::MonadNine, false)]
+    #[case(MonadHardfork::MonadTen, false)]
+    #[case(MonadHardfork::MonadNext, true)]
+    fn caller_tracking_requires_monad_next(
+        #[case] spec: MonadHardfork,
+        #[case] track_callers: bool,
+    ) {
+        let sender = Address::repeat_byte(0x11);
+        let root = Address::repeat_byte(0x22);
+        let child = Address::repeat_byte(0x33);
+        let mut root_code = vec![opcode::PUSH0; 5];
+        root_code.push(opcode::PUSH20);
+        root_code.extend_from_slice(child.as_slice());
+        root_code.extend_from_slice(&[opcode::GAS, opcode::CALL, opcode::STOP]);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            sender,
+            AccountInfo { balance: U256::from(1_000_000), ..Default::default() },
+        );
+        for (address, code) in [(root, root_code), (child, vec![opcode::STOP])] {
+            db.insert_account_info(
+                address,
+                AccountInfo::default().with_code(Bytecode::new_raw(code.into())),
+            );
+        }
+        let ctx = monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(spec));
+        let mut evm = ctx.build_monad_with_inspector(CallerSnapshots::default());
+        let tx =
+            TxEnv::builder().caller(sender).to(root).gas_limit(100_000).gas_price(0).build_fill();
+        let result = evm.inspect_one_tx(tx).unwrap();
+        assert!(result.is_success(), "{result:?}");
+        let expected = if track_callers {
+            vec![vec![sender], vec![sender, root]]
+        } else {
+            vec![vec![], vec![]]
+        };
+        assert_eq!(evm.0.inspector.0, expected);
     }
 
     #[test]

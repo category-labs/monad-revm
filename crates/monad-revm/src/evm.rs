@@ -3,7 +3,7 @@ use crate::{
     api::exec::MonadContextTr,
     instructions::{monad_instructions, MonadInstructionProvider, MonadInstructions},
     precompiles::{DelegationAwarePrecompiles, MonadPrecompiles},
-    MonadJournalTr,
+    MonadHardfork, MonadJournalTr,
 };
 use revm::{
     context::{Cfg, ContextError, ContextSetters, Evm, FrameStack},
@@ -184,11 +184,12 @@ where
                 unsafe { self.0.frame_stack.push(token) };
             }
             let frame = self.0.frame_stack.get();
-            // Retain callers even before MonadNext so a nested frame can select that spec.
-            self.0
-                .ctx
-                .journal_mut()
-                .set_call_frame_sender(frame.depth, frame.interpreter.input.caller_address);
+            if MonadHardfork::MonadNext.is_enabled_in(spec) {
+                self.0
+                    .ctx
+                    .journal_mut()
+                    .set_call_frame_sender(frame.depth, frame.interpreter.input.caller_address);
+            }
             frame
         }))
     }

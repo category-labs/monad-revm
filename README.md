@@ -114,8 +114,8 @@ includes the prefix and selector.
 Custom `MonadJournalTr` implementations must implement `call_frame_sender` and
 `set_call_frame_sender`. Store callers by zero-based frame depth, overwrite a depth on frame
 entry, retain entries across state-checkpoint rollback, and clear them on transaction commit,
-discard, and finalization. `MonadEvm` records callers for every executed frame, including older
-hardforks, so a nested frame can switch to `MonadNext` without losing its ancestors.
+discard, and finalization. `MonadEvm` records callers only on `MonadNext`. MIP-18 assumes a
+single hardfork throughout each transaction.
 
 ## Staking Precompile (`0x1000`)
 
