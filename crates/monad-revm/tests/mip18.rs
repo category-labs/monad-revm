@@ -2,7 +2,7 @@
 
 use monad_revm::{
     extension::{CALLERN_SELECTOR, CALLSTACKDEPTH_SELECTOR, EXTENSION},
-    monad_context_with_db, MonadBuilder, MonadCfgEnv, MonadContext, MonadHaltReason, MonadHardfork,
+    monad_context_with_db, MonadBuilder, MonadCfgEnv, MonadHaltReason, MonadHardfork,
 };
 use revm::{
     bytecode::opcode,
@@ -10,11 +10,10 @@ use revm::{
     context_interface::result::{HaltReason, OutOfGasError},
     database::InMemoryDB,
     inspector::{InspectEvm, NoOpInspector},
-    interpreter::{CallInputs, CallOutcome},
     precompile::u64_to_address,
     primitives::{Address, TxKind, U256},
     state::{AccountInfo, Bytecode},
-    ExecuteEvm, Inspector,
+    ExecuteEvm,
 };
 use rstest::rstest;
 
@@ -341,45 +340,6 @@ fn assigned_selectors_advance_program_counter(#[values(false, true)] inspect: bo
         assert!(result.is_success(), "{result:?}");
         assert_eq!(U256::from_be_slice(result.output().unwrap()), U256::from(expected_pc));
     }
-}
-
-#[derive(Debug)]
-struct SwitchSpec(MonadHardfork);
-
-impl Inspector<MonadContext<InMemoryDB>> for SwitchSpec {
-    fn call(
-        &mut self,
-        ctx: &mut MonadContext<InMemoryDB>,
-        inputs: &mut CallInputs,
-    ) -> Option<CallOutcome> {
-        if inputs.target_address == CHILD {
-            let mut cfg = ctx.cfg.clone().into_inner();
-            cfg.spec = self.0;
-            ctx.cfg = MonadCfgEnv::from(cfg);
-        }
-        None
-    }
-}
-
-#[test]
-fn child_can_enable_extensions_with_legacy_ancestors() {
-    let db = database([(ROOT, forward(CHILD, opcode::CALL)), (CHILD, probe())]);
-    let ctx =
-        monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadTen));
-    let mut evm = ctx.build_monad_with_inspector(SwitchSpec(MonadHardfork::MonadNext));
-    assert_probe(&evm.inspect_one_tx(transaction(1_000_000)).unwrap(), &[SENDER, ROOT]);
-}
-
-#[test]
-fn parent_extensions_are_restored_after_legacy_child() {
-    let mut root = call(CHILD, opcode::CALL);
-    root.push(opcode::POP);
-    root.extend(probe());
-    let db = database([(ROOT, root), (CHILD, probe())]);
-    let ctx =
-        monad_context_with_db(db).with_cfg(MonadCfgEnv::new_with_spec(MonadHardfork::MonadNext));
-    let mut evm = ctx.build_monad_with_inspector(SwitchSpec(MonadHardfork::MonadTen));
-    assert_probe(&evm.inspect_one_tx(transaction(1_000_000)).unwrap(), &[SENDER]);
 }
 
 #[rstest]

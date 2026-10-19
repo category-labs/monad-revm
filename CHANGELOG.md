@@ -6,8 +6,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Added
 
-- Added MIP-18 `CALLSTACKDEPTH` and `CALLERN` extension opcodes on `MonadNext`, with
-  2-gas pricing and caller tracking across calls and contract creation.
+- Added MIP-18 `CALLSTACKDEPTH` and `CALLERN` with 2-gas pricing and caller tracking
+  across calls and contract creation, enabled only on `MonadNext`.
 - Added MIP-7 `EXTENSION` decoding on `MonadNext`, with invalid-selector handling and
   unchanged jump-destination analysis.
 - Added the `monad-fixtures` CLI for replaying Monad Eight and Nine blockchain JSON fixtures,
