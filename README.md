@@ -86,6 +86,17 @@ behavior on success, revert, error, and immediate precompile completion.
 are charged per page. `MonadNine` retains slot-level storage accounting; later hardforks inherit
 the `MonadTen` behavior.
 
+### MIP-7 extension opcodes
+
+`MonadNext` enables the [MIP-7](https://mips.monad.xyz/MIPs/MIP-7) `EXTENSION` prefix
+(`0xAE`). The following byte selects the extended opcode. MIP-7 defines the encoding;
+individual extensions assign selectors, semantics, and gas costs, with no additional charge
+for the prefix. `MonadNext` remains unscheduled, and earlier hardforks reject `0xAE`.
+
+Unassigned selectors, the excluded `JUMPDEST` and `PUSH1`–`PUSH32` selectors, and a trailing
+prefix halt exceptionally. Ordinary jump-destination analysis is unchanged: a `JUMPDEST`
+following `0xAE` remains a valid jump target, and `PUSH` data remains excluded from jump targets.
+
 ## Staking Precompile (`0x1000`)
 
 ### Design overview
