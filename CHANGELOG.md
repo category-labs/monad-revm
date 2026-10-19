@@ -6,6 +6,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Added
 
+- Added MIP-18 `CALLSTACKDEPTH` and `CALLERN` extension opcodes on `MonadNext`, with
+  2-gas pricing and caller tracking across calls and contract creation.
 - Added MIP-7 `EXTENSION` decoding on `MonadNext`, with invalid-selector handling and
   unchanged jump-destination analysis.
 - Added the `monad-fixtures` CLI for replaying Monad Eight and Nine blockchain JSON fixtures,
@@ -29,6 +31,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Changed
 
+- Require custom `MonadJournalTr` implementations to record frame callers with
+  `set_call_frame_sender` and expose them through `call_frame_sender` for MIP-18.
 - Expose reserve rejection as `MonadHaltReason::ReserveBalanceViolation`, with Ethereum halts
   wrapped in `MonadHaltReason::Ethereum`. Execution results now use this Monad halt-reason type.
 - Require `MonadJournalTr` implementations to support execution checkpoints that preserve call

@@ -66,7 +66,9 @@ fn unassigned_selectors(
     )]
     spec: MonadHardfork,
 ) {
-    for selector in 0..=u8::MAX {
+    // MIP-18 assigns selectors 0x00 and 0x01 on MonadNext.
+    let first_unassigned = if spec == MonadHardfork::MonadNext { 2 } else { 0 };
+    for selector in first_unassigned..=u8::MAX {
         assert_halt(
             execute(spec, vec![EXTENSION, selector], inspect),
             invalid_extension_reason(spec),

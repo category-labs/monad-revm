@@ -183,7 +183,13 @@ where
             } else {
                 unsafe { self.0.frame_stack.push(token) };
             }
-            self.0.frame_stack.get()
+            let frame = self.0.frame_stack.get();
+            // Retain callers even before MonadNext so a nested frame can select that spec.
+            self.0
+                .ctx
+                .journal_mut()
+                .set_call_frame_sender(frame.depth, frame.interpreter.input.caller_address);
+            frame
         }))
     }
 

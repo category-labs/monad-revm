@@ -6,6 +6,7 @@
 //! - MIP-3 memory pricing and feature-gated pooled memory limits
 //! - Per-frame Monad hardfork instruction and precompile selection
 //! - MIP-7 extension opcode decoding on MonadNext.
+//! - MIP-18 call stack introspection on MonadNext.
 //! - Repriced and Monad-specific protocol precompiles
 
 #![cfg_attr(not(feature = "std"), no_std)]

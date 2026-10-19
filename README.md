@@ -97,6 +97,26 @@ Unassigned selectors, the excluded `JUMPDEST` and `PUSH1`–`PUSH32` selectors, 
 prefix halt exceptionally. Ordinary jump-destination analysis is unchanged: a `JUMPDEST`
 following `0xAE` remains a valid jump target, and `PUSH` data remains excluded from jump targets.
 
+### MIP-18 call stack introspection
+
+`MonadNext` enables [MIP-18](https://mips.monad.xyz/MIPs/MIP-18), which assigns two
+selectors under the MIP-7 `EXTENSION` prefix.
+
+| Encoding | Instruction | Stack input | Stack output | Gas |
+|----------|-------------|-------------|--------------|-----|
+| `0xAE 0x00` | `CALLSTACKDEPTH` | None | Current frame depth, starting at zero | 2 |
+| `0xAE 0x01` | `CALLERN` | Ancestor index `n` | The caller of the frame `n` levels above, or zero if out of range | 2 |
+
+`CALLERN(0)` equals `CALLER`, and `CALLERN(CALLSTACKDEPTH)` equals `ORIGIN`.
+Ancestor callers retain the usual `DELEGATECALL` and `CALLCODE` semantics. The gas charge
+includes the prefix and selector.
+
+Custom `MonadJournalTr` implementations must implement `call_frame_sender` and
+`set_call_frame_sender`. Store callers by zero-based frame depth, overwrite a depth on frame
+entry, retain entries across state-checkpoint rollback, and clear them on transaction commit,
+discard, and finalization. `MonadEvm` records callers for every executed frame, including older
+hardforks, so a nested frame can switch to `MonadNext` without losing its ancestors.
+
 ## Staking Precompile (`0x1000`)
 
 ### Design overview

@@ -1,4 +1,4 @@
-//! Monad journal wrapper with reserve-balance and page-access tracking.
+//! Monad journal wrapper with reserve-balance, page-access, and call-frame tracking.
 
 use crate::{
     page::{PageAccessTracker, StoragePageKey},
@@ -26,7 +26,7 @@ use revm::{
     state::{Account, EvmState},
 };
 
-/// Monad journal extension used by reserve-balance-aware execution.
+/// Monad journal extension used by Monad execution.
 ///
 /// Checkpoint rollback must notify [`ReserveBalanceTracker::before_checkpoint_revert`] before
 /// restoring state unless reserve tracking is preserved for a synthetic frame. It must always
@@ -49,6 +49,17 @@ pub trait MonadJournalTr: JournalTr<State = EvmState> {
 
     /// Returns the MIP-8 page access tracker mutably.
     fn page_access_mut(&mut self) -> &mut PageAccessTracker;
+
+    /// Returns the caller recorded for an active frame at the given zero-based depth.
+    ///
+    /// The frame must have been recorded with [`Self::set_call_frame_sender`].
+    fn call_frame_sender(&self, depth: usize) -> Address;
+
+    /// Records a frame's CALLER value at its zero-based depth for MIP-18.
+    ///
+    /// Entries are overwritten on frame entry, not reverted with state checkpoints. Only
+    /// depths at or below the executing frame may be read. Clear entries at transaction end.
+    fn set_call_frame_sender(&mut self, depth: usize, sender: Address);
 
     /// Snapshots execution state without increasing the observable call depth.
     ///
@@ -85,6 +96,7 @@ pub struct MonadJournal<DB: Database> {
     preserve_reserve_balance_tracker: bool,
     monad_spec: MonadHardfork,
     page_access: PageAccessTracker,
+    call_frame_senders: Vec<Address>,
 }
 
 impl<DB: Database> MonadJournal<DB> {
@@ -105,6 +117,7 @@ impl<DB: Database> MonadJournal<DB> {
             preserve_reserve_balance_tracker: false,
             monad_spec: MonadHardfork::default(),
             page_access: PageAccessTracker::default(),
+            call_frame_senders: Vec::new(),
         }
     }
 
@@ -181,6 +194,17 @@ impl<DB: Database> MonadJournalTr for MonadJournal<DB> {
         &mut self.page_access
     }
 
+    fn call_frame_sender(&self, depth: usize) -> Address {
+        self.call_frame_senders[depth]
+    }
+
+    fn set_call_frame_sender(&mut self, depth: usize, sender: Address) {
+        if depth >= self.call_frame_senders.len() {
+            self.call_frame_senders.resize(depth + 1, Address::ZERO);
+        }
+        self.call_frame_senders[depth] = sender;
+    }
+
     fn checkpoint_execution(&mut self) -> JournalCheckpoint {
         self.page_access.checkpoint();
         let checkpoint = self.inner.checkpoint();
@@ -228,6 +252,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
             preserve_reserve_balance_tracker: false,
             monad_spec: MonadHardfork::default(),
             page_access: PageAccessTracker::default(),
+            call_frame_senders: Vec::new(),
         }
     }
 
@@ -465,6 +490,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
 
     fn commit_tx(&mut self) {
         self.inner.commit_tx();
+        self.call_frame_senders.clear();
         self.page_access.clear();
         if !self.preserve_reserve_balance_tracker {
             self.reserve_balance.clear();
@@ -476,6 +502,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
             self.inner.journal.iter().flat_map(reverted_addresses_from_entry).collect::<Vec<_>>()
         });
         self.inner.discard_tx();
+        self.call_frame_senders.clear();
         self.page_access.clear();
         if let Some(reverted_addresses) = reverted_addresses {
             self.reserve_balance.on_checkpoint_revert(reverted_addresses, &self.inner.state);
@@ -485,6 +512,7 @@ impl<DB: Database> JournalTr for MonadJournal<DB> {
     }
 
     fn finalize(&mut self) -> Self::State {
+        self.call_frame_senders.clear();
         self.page_access.clear();
         if !self.preserve_reserve_balance_tracker {
             self.reserve_balance.clear();
@@ -590,6 +618,40 @@ mod tests {
         journal.set_spec_id(spec.into());
         journal.load_account(address).expect("account should load");
         journal
+    }
+
+    #[test]
+    fn call_frame_senders_survive_reverts_and_replace_siblings() {
+        let mut journal = MonadJournal::new(EmptyDB::new());
+        let origin = Address::repeat_byte(0x11);
+        let child = Address::repeat_byte(0x22);
+        let sibling = Address::repeat_byte(0x33);
+        journal.set_call_frame_sender(0, origin);
+        let checkpoint = journal.checkpoint();
+        journal.set_call_frame_sender(1, child);
+        journal.checkpoint_revert(checkpoint);
+        assert_eq!(journal.call_frame_sender(0), origin);
+        assert_eq!(journal.call_frame_sender(1), child);
+        journal.set_call_frame_sender(1, sibling);
+        assert_eq!(journal.call_frame_sender(1), sibling);
+    }
+
+    #[test]
+    fn transaction_boundaries_clear_call_frame_senders() {
+        let mut journal = MonadJournal::new(EmptyDB::new());
+        let caller = Address::repeat_byte(0x11);
+        for preserve_reserve in [false, true] {
+            journal.set_preserve_reserve_balance_tracker(preserve_reserve);
+            journal.set_call_frame_sender(0, caller);
+            journal.commit_tx();
+            assert!(journal.call_frame_senders.is_empty());
+            journal.set_call_frame_sender(0, caller);
+            journal.discard_tx();
+            assert!(journal.call_frame_senders.is_empty());
+            journal.set_call_frame_sender(0, caller);
+            journal.finalize();
+            assert!(journal.call_frame_senders.is_empty());
+        }
     }
 
     #[test]
