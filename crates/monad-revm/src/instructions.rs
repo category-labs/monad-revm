@@ -1,4 +1,4 @@
-use crate::{api::exec::MonadContextTr, MonadHardfork};
+use crate::{api::exec::MonadContextTr, extension, MonadHardfork};
 use alloc::vec::Vec;
 use revm::{
     context_interface::cfg::{GasId, GasParams},
@@ -205,6 +205,14 @@ pub fn monad_instructions<CTX: MonadContextTr>(spec: MonadHardfork) -> MonadInst
         use crate::page_opcode;
 
         instructions.insert_instruction(SSTORE, Instruction::new(page_opcode::sstore), 0);
+    }
+
+    if MonadHardfork::MonadNext.is_enabled_in(spec) {
+        instructions.insert_instruction(
+            extension::EXTENSION,
+            Instruction::new(extension::extension),
+            0,
+        );
     }
 
     MonadInstructions { spec, spec_stack: Vec::new(), inner: instructions }

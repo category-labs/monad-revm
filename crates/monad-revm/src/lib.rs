@@ -5,6 +5,7 @@
 //! - Monad opcode gas and bytecode size limits
 //! - MIP-3 memory pricing and feature-gated pooled memory limits
 //! - Per-frame Monad hardfork instruction and precompile selection
+//! - MIP-7 extension opcode decoding on MonadNext.
 //! - Repriced and Monad-specific protocol precompiles
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -21,6 +22,7 @@ pub mod cfg;
 pub mod chain;
 /// EVM type aliases and builders for Monad.
 pub mod evm;
+pub mod extension;
 /// Handler customizations for Monad execution.
 pub mod handler;
 /// Monad-specific instruction set with custom gas costs.

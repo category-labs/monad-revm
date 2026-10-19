@@ -6,6 +6,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Added
 
+- Added MIP-7 `EXTENSION` decoding on `MonadNext`, with invalid-selector handling and
+  unchanged jump-destination analysis.
 - Added the `monad-fixtures` CLI for replaying Monad Eight and Nine blockchain JSON fixtures,
   checking execution commitments and final state, and reporting passed, failed, and unsupported
   cases in text or JSON.

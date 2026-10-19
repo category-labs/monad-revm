@@ -21,7 +21,7 @@ pub enum MonadHardfork {
     /// MIP-8 page-ified storage state.
     #[default]
     MonadTen = 102,
-    /// Next development spec
+    /// Next development spec, including MIP-7.
     MonadNext = 103,
 }
 
