@@ -53,6 +53,11 @@ pub fn extension<WIRE: InterpreterTypes, H: MonadContextTr + ?Sized>(
         // MIP-7 leaves every other selector invalid, including JUMPDEST and PUSH1..PUSH32.
         _ => return Err(InstructionResult::InvalidFEOpcode),
     }
+    // Legacy analysis treats a final 0x00 selector as STOP and may omit padding.
+    // Stop after a terminal extension so the interpreter never fetches past the code.
+    if context.interpreter.bytecode.pc() == context.interpreter.bytecode.bytecode_len() {
+        return Err(InstructionResult::Stop);
+    }
     Ok(())
 }
 
@@ -73,6 +78,40 @@ mod tests {
         primitives::{hardfork::SpecId, Address},
         state::Bytecode,
     };
+
+    #[test]
+    fn terminal_extensions_stop_after_selector() {
+        let caller = Address::repeat_byte(0x11);
+        for (selector, expected) in
+            [(CALLSTACKDEPTH_SELECTOR, U256::ZERO), (CALLERN_SELECTOR, caller.into_word().into())]
+        {
+            let mut ctx = monad_context_with_db(EmptyDB::new());
+            ctx.journal_mut().set_call_frame_sender(0, caller);
+            let mut interpreter = Interpreter::<EthInterpreter>::new(
+                SharedMemory::new(),
+                ExtBytecode::new(Bytecode::new_raw(vec![EXTENSION, selector].into())),
+                InputsImpl { caller_address: caller, ..Default::default() },
+                false,
+                SpecId::OSAKA,
+                2,
+            );
+            if selector == CALLERN_SELECTOR {
+                assert!(interpreter.stack.push(U256::ZERO));
+            }
+            let instructions = monad_instructions(MonadHardfork::MonadNext);
+            assert_eq!(
+                interpreter.step(
+                    instructions.instruction_table(),
+                    instructions.gas_table(),
+                    &mut ctx,
+                ),
+                Err(InstructionResult::Stop),
+            );
+            assert_eq!(interpreter.stack.data(), &[expected]);
+            assert_eq!(interpreter.gas.remaining(), 0);
+            assert_eq!(interpreter.bytecode.pc(), 2);
+        }
+    }
 
     #[test]
     fn maximum_call_depth_and_full_width_indices() {
