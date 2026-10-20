@@ -32,6 +32,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
   transaction.
 - Adjudicate reserve rejection before root inspector end callbacks so traces observe the failed
   frame and inspectors observe rolled-back execution state.
+- Match staking input consumption with the execution client, rejecting trailing bytes while
+  preserving permissive fixed-value decoding and sequential validator-registration tails.
 
 ### Changed
 
