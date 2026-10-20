@@ -892,6 +892,17 @@ fn internal_delegate<S: StakingStorage>(
         }
     }
 
+    // Emit Delegate before any validator status change.
+    let topics = vec![
+        Delegate::SIGNATURE_HASH,
+        B256::from(U256::from(val_id)),
+        B256::from(U256::from_be_slice(caller.as_slice())),
+    ];
+    let mut data = Vec::with_capacity(64);
+    data.extend_from_slice(&amount.to_be_bytes::<32>());
+    data.extend_from_slice(&U256::from(activation_epoch).to_be_bytes::<32>());
+    emit_event(s, topics, data)?;
+
     // Update validator total stake
     let mut val = read_validator(s, val_id)?;
     val.stake = checked_add_u256(val.stake, amount)?;
@@ -907,17 +918,6 @@ fn internal_delegate<S: StakingStorage>(
 
     // Insert into linked lists
     linked_list_insert(s, val_id, caller)?;
-
-    // Emit Delegate event
-    let topics = vec![
-        Delegate::SIGNATURE_HASH,
-        B256::from(U256::from(val_id)),
-        B256::from(U256::from_be_slice(caller.as_slice())),
-    ];
-    let mut data = Vec::with_capacity(64);
-    data.extend_from_slice(&amount.to_be_bytes::<32>());
-    data.extend_from_slice(&U256::from(activation_epoch).to_be_bytes::<32>());
-    emit_event(s, topics, data)?;
 
     Ok(())
 }
@@ -2419,7 +2419,21 @@ mod tests {
         // Delegate amount that would overflow validator stake
         let result = internal_delegate(&mut storage, val_id, &caller, U256::from(1));
 
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "internal error");
+        // The transaction must roll back the event emitted before the stake overflow.
+        assert_eq!(
+            storage.logs,
+            [Log {
+                address: STAKING_ADDRESS,
+                data: Delegate {
+                    validatorId: val_id,
+                    delegator: caller,
+                    amount: U256::from(1),
+                    activationEpoch: 2,
+                }
+                .encode_log_data(),
+            }]
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
