@@ -91,6 +91,7 @@ fn assert_violation(out: &ResultAndState<MonadHaltReason>, sender_nonce: u64, ga
     assert_eq!(out.state[&SENDER].info.nonce, sender_nonce);
     assert_eq!(out.state[&BENEFICIARY].info.balance, U256::from(gas_limit));
     assert!(out.result.logs().is_empty());
+    assert_eq!(out.result.tx_gas_used(), gas_limit);
     assert_eq!(out.result.gas().inner_refunded(), 0);
 }
 
@@ -374,6 +375,8 @@ fn preserved_synthetic_calls_defer_reserve_enforcement(
     let first =
         if inspect { evm.inspect_one_tx(tx).unwrap() } else { evm.transact_one(tx).unwrap() };
     assert!(first.is_success());
+    assert_eq!(first.tx_gas_used(), GAS_LIMIT);
+    assert_eq!(first.gas().total_gas_spent(), 21_018);
     assert!(evm.0.ctx.journaled_state.reserve_balance().has_violation());
     let tx = TxEnv::builder()
         .caller(SENDER)
@@ -385,6 +388,9 @@ fn preserved_synthetic_calls_defer_reserve_enforcement(
     let second =
         if inspect { evm.inspect_one_tx(tx).unwrap() } else { evm.transact_one(tx).unwrap() };
     assert!(second.is_success());
+    assert_eq!(second.tx_gas_used(), GAS_LIMIT);
+    assert!(second.gas().total_gas_spent() > first.gas().total_gas_spent());
+    assert!(second.gas().total_gas_spent() < GAS_LIMIT);
     assert!(!evm.0.ctx.journaled_state.reserve_balance().has_violation());
     assert_eq!(evm.finalize()[&SENDER].info.balance, mon(12));
 }

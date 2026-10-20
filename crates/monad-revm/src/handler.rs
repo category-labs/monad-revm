@@ -14,8 +14,8 @@ use revm::{
         Block, Cfg, ContextTr, Database, JournalTr, Transaction,
     },
     handler::{
-        evm::FrameTr, handler::EvmTrError, pre_execution, validation, EvmTr, FrameResult, Handler,
-        MainnetHandler,
+        evm::FrameTr, handler::EvmTrError, post_execution, pre_execution, validation, EvmTr,
+        FrameResult, Handler, MainnetHandler,
     },
     interpreter::{
         interpreter_action::FrameInit, GasTracker, InitialAndFloorGas, InstructionResult,
@@ -194,6 +194,29 @@ where
             });
         }
         Ok(result.map_haltreason(Into::into))
+    }
+
+    fn post_execution(
+        &self,
+        evm: &mut Self::Evm,
+        exec_result: &mut FrameResult,
+        init_and_floor_gas: InitialAndFloorGas,
+        eip7702_gas_refund: i64,
+    ) -> Result<ResultGas, Self::Error> {
+        self.refund(evm, exec_result, eip7702_gas_refund)?;
+        let result_gas = post_execution::build_result_gas(
+            exec_result.instruction_result().is_halt(),
+            exec_result.gas(),
+            init_and_floor_gas,
+        );
+        self.eip7623_check_gas_floor(evm, exec_result, init_and_floor_gas);
+        self.reimburse_caller(evm, exec_result)?;
+        self.reward_beneficiary(evm, exec_result)?;
+
+        // Monad's minimum transaction charge is the full gas limit. Apply it only to the
+        // result so total_gas_spent and interpreter gas still describe execution consumption.
+        // System calls bypass post-execution and retain their execution-only gas accounting.
+        Ok(result_gas.with_floor_gas(evm.ctx_ref().tx().gas_limit()))
     }
 
     // Disable gas refunds
@@ -691,13 +714,9 @@ mod tests {
             result.result.tx_gas_used()
         );
 
-        // Verify gas_used < gas_limit (to confirm unused gas wasn't refunded)
-        assert!(
-            result.result.tx_gas_used() < gas_limit,
-            "Gas used ({}) should be less than gas_limit ({})",
-            result.result.tx_gas_used(),
-            gas_limit
-        );
+        // Receipt gas charges the limit while execution consumption retains unused gas.
+        assert_eq!(result.result.tx_gas_used(), gas_limit);
+        assert_eq!(result.result.gas().total_gas_spent(), 21_000);
     }
 
     #[test]

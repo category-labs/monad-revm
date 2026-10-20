@@ -215,15 +215,16 @@ fn delegated_ethereum_precompiles_execute_empty_code(
         assert_eq!(outcome.result.gas.total_gas_spent(), 0, "target {target}");
 
         let expected_gas = if call_opcode == 0 {
-            // EIP-7623 calldata floor exceeds the intrinsic gas for this empty execution.
-            21_200
+            // Empty execution consumes only intrinsic gas, below the calldata floor.
+            21_080
         } else {
             // Intrinsic gas, forwarding bytecode, cold authority, and warm delegation target.
             31_331
                 + if spec == MonadHardfork::MonadEight { 3 } else { 0 }
                 + if matches!(call_opcode, opcode::CALL | opcode::CALLCODE) { 2 } else { 0 }
         };
-        assert_eq!(result.tx_gas_used(), expected_gas, "target {target}");
+        assert_eq!(result.tx_gas_used(), 1_000_000, "target {target}");
+        assert_eq!(result.gas().total_gas_spent(), expected_gas, "target {target}");
     }
 }
 

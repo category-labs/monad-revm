@@ -287,6 +287,84 @@ fn executes_transactions_storage_logs_and_reverts_on_both_forks() {
 }
 
 #[test]
+fn accumulates_charged_receipt_gas_for_success_revert_and_halt() {
+    for network in ["MONAD_EIGHT", "MONAD_NINE"] {
+        let mut case = fixture(network, "0x00", true, 0, false, false);
+        let sender = signed_transfer(0).recover_signer().unwrap();
+        let reverting = Address::repeat_byte(0x44);
+        let halting = Address::repeat_byte(0x55);
+        case["pre"][reverting.to_string()] = account(1, 0, "0x5f5ffd");
+        case["pre"][halting.to_string()] = account(1, 0, "0xfe");
+        let mut genesis = alloy_rlp::decode_exact::<Header>(
+            &hex::decode(case["genesisRLP"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        genesis.state_root = root(&case["pre"]);
+        genesis.gas_limit = 360_000;
+        case["genesisBlockHeader"] = header_json(&genesis);
+        case["genesisRLP"] = json!(hex::encode_prefixed(alloy_rlp::encode(&genesis)));
+        let mut post = case["pre"].clone();
+        post[sender.to_string()] = account(3, INITIAL_BALANCE - 1_080_007, "0x");
+        post[RECIPIENT.to_string()] = account(1, 7, "0x00");
+        post[BENEFICIARY.to_string()] = account(0, 720_000, "0x");
+
+        let mut transactions = Vec::new();
+        let mut receipts = Vec::new();
+        for (nonce, (target, gas_limit, cumulative_gas_used, success)) in [
+            (RECIPIENT, 100_000, 100_000, true),
+            (reverting, 120_000, 220_000, false),
+            (halting, 140_000, 360_000, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tx = TxLegacy {
+                chain_id: Some(143),
+                nonce: nonce as u64,
+                gas_price: 3,
+                gas_limit,
+                to: TxKind::Call(target),
+                value: U256::from(7),
+                input: Bytes::new(),
+            };
+            let signature = sign_message(SECRET, tx.signature_hash()).unwrap();
+            transactions.push(TxEnvelope::from(tx.into_signed(signature)));
+            receipts.push(ReceiptEnvelope::from_typed(
+                TxType::Legacy,
+                Receipt { status: success.into(), cumulative_gas_used, logs: vec![] }.with_bloom(),
+            ));
+        }
+        let header = Header {
+            parent_hash: genesis.hash_slow(),
+            number: 1,
+            timestamp: 15,
+            gas_used: 360_000,
+            state_root: root(&post),
+            transactions_root: calculate_transaction_root(&transactions),
+            receipts_root: calculate_receipt_root(&receipts),
+            ..genesis
+        };
+        let block = Block::new(
+            header.clone(),
+            BlockBody { transactions, ommers: vec![], withdrawals: Some(Default::default()) },
+        );
+        case["blocks"] = json!([block_json(&block)]);
+        case["postState"] = post;
+        case["lastblockhash"] = json!(header.hash_slow());
+        let report = check(case.clone());
+        assert_eq!(report.cases[0].status, Status::Passed, "{network}: {report:?}");
+
+        rewrite_block(&mut case, |block| block.header.gas_limit = 350_000);
+        let report = check(case);
+        assert_eq!(report.cases[0].status, Status::Failed, "{network}: {report:?}");
+        assert!(
+            report.cases[0].message.contains("transactions exceed block gas limit"),
+            "{network}: {report:?}"
+        );
+    }
+}
+
+#[test]
 fn replays_typed_transactions_and_authorizations() {
     let access_list =
         AccessList(vec![AccessListItem { address: RECIPIENT, storage_keys: vec![B256::ZERO] }]);
