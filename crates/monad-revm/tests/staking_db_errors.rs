@@ -5,7 +5,9 @@ use monad_revm::{
     monad_context_with_db,
     staking::{
         constants::{MON, SYSTEM_ADDRESS, UNIT_BIAS},
-        interface::IMonadStaking::{delegateCall, getEpochCall, syscallSnapshotCall, withdrawCall},
+        interface::IMonadStaking::{
+            changeCommissionCall, delegateCall, getEpochCall, syscallSnapshotCall, withdrawCall,
+        },
         run_staking_precompile, run_staking_with_reader,
         storage::{
             accumulator_key, consensus_view_key, global_slots, snapshot_view_key, validator_key,
@@ -404,7 +406,11 @@ fn staking_contract_error_remains_catchable(#[values(false, true)] nested: bool)
             TxEnv::builder()
                 .caller(SENDER)
                 .to(if nested { PROXY } else { STAKING_ADDRESS })
-                .data(delegateCall { validatorId: 1 }.abi_encode().into())
+                .data(
+                    changeCommissionCall { validatorId: 1, commission: U256::ZERO }
+                        .abi_encode()
+                        .into(),
+                )
                 .gas_limit(GAS_LIMIT)
                 .gas_price(1)
                 .build_fill(),

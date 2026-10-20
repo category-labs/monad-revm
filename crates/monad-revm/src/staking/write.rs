@@ -1090,14 +1090,15 @@ pub fn handle_delegate<S: StakingStorage>(
     let call = delegateCall::abi_decode_raw(&input[4..])
         .map_err(|e| PrecompileHalt::Other(format!("Invalid input: {e}").into()))?;
 
-    let val = read_validator(s, call.validatorId)?;
-    if !val.exists() {
-        return Err(PrecompileHalt::Other("unknown validator".into()));
-    }
-    // Zero-value delegate is a success no-op
+    // Zero-value delegate is a success no-op, even for an unknown validator.
     if call_value.is_zero() {
         let encoded = delegateCall::abi_encode_returns(&true);
         return Ok((gas::DELEGATE, encoded.into()));
+    }
+
+    let val = read_validator(s, call.validatorId)?;
+    if !val.exists() {
+        return Err(PrecompileHalt::Other("unknown validator".into()));
     }
     if call_value < DUST_THRESHOLD {
         return Err(PrecompileHalt::Other("delegation is too small".into()));

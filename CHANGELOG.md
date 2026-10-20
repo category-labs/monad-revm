@@ -16,6 +16,7 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Fixed
 
+- Accept zero-value staking delegations for any validator ID without accessing staking state.
 - Emit staking delegation events before validator status changes for delegation,
   validator registration, and reward compounding.
 - Report the full transaction gas limit for receipt and block accounting while retaining
