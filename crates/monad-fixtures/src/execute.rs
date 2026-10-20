@@ -171,11 +171,8 @@ pub(crate) fn execute(fixture: &Fixture) -> Result<Stats> {
                 tx.tx_type() != TxType::Eip4844,
                 "block {index}, transaction {tx_index}: blob transactions are invalid on Monad"
             );
-            cumulative_gas_used = cumulative_gas_used
-                .checked_add(tx.gas_limit())
-                .ok_or_else(|| eyre!("block {index}: cumulative gas overflow"))?;
             ensure!(
-                cumulative_gas_used <= header.gas_limit,
+                tx.gas_limit() <= header.gas_limit - cumulative_gas_used,
                 "block {index}: transactions exceed block gas limit"
             );
             evm.0.ctx.chain.current_tx_index = tx_index;
@@ -203,6 +200,13 @@ pub(crate) fn execute(fixture: &Fixture) -> Result<Stats> {
             let mut result = evm.transact(env).wrap_err_with(|| {
                 format!("block {index}, transaction {tx_index}: unexpected transaction rejection")
             })?;
+            cumulative_gas_used = cumulative_gas_used
+                .checked_add(result.result.tx_gas_used())
+                .ok_or_else(|| eyre!("block {index}: cumulative gas overflow"))?;
+            ensure!(
+                cumulative_gas_used <= header.gas_limit,
+                "block {index}: transactions exceed block gas limit"
+            );
             outcomes.push(match &result.result {
                 ExecutionResult::Success { reason, .. } => {
                     format!("{tx_index}: success ({reason:?})")
@@ -210,7 +214,6 @@ pub(crate) fn execute(fixture: &Fixture) -> Result<Stats> {
                 ExecutionResult::Revert { .. } => format!("{tx_index}: revert"),
                 ExecutionResult::Halt { reason, .. } => format!("{tx_index}: halt ({reason:?})"),
             });
-            // Monad receipt gas includes the entire gas limit, independently of VM gas spent.
             let receipt = Receipt {
                 status: result.result.is_success().into(),
                 cumulative_gas_used,

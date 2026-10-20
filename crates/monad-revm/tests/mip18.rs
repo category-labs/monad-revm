@@ -299,7 +299,7 @@ fn extension_gas(#[values(false, true)] inspect: bool) {
     ] {
         let result = run(code.clone(), 21_000 + gas, inspect);
         assert!(result.is_success(), "{result:?}");
-        assert_eq!(result.tx_gas_used(), 21_000 + gas);
+        assert_eq!(result.gas().total_gas_spent(), 21_000 + gas);
         assert_halt(
             run(code, 21_000 + gas - 1, inspect),
             HaltReason::OutOfGas(OutOfGasError::Basic),
@@ -310,7 +310,7 @@ fn extension_gas(#[values(false, true)] inspect: bool) {
     code.extend_from_slice(&[EXTENSION, CALLERN_SELECTOR]);
     let result = run(code, 21_005, inspect);
     assert!(result.is_success(), "{result:?}");
-    assert_eq!(result.tx_gas_used(), 21_005);
+    assert_eq!(result.gas().total_gas_spent(), 21_005);
 }
 
 #[rstest]

@@ -440,23 +440,23 @@ mod tests {
     #[test]
     fn test_mip8_sload_warms_entire_page() {
         for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
-            let same_page = run_contract(spec, storage_reads(127)).tx_gas_used();
-            let different_page = run_contract(spec, storage_reads(128)).tx_gas_used();
+            let same_page = run_contract(spec, storage_reads(127)).gas().total_gas_spent();
+            let different_page = run_contract(spec, storage_reads(128)).gas().total_gas_spent();
             assert_eq!(different_page - same_page, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
         }
 
         let legacy_same_page =
-            run_contract(MonadHardfork::MonadNine, storage_reads(127)).tx_gas_used();
+            run_contract(MonadHardfork::MonadNine, storage_reads(127)).gas().total_gas_spent();
         let legacy_different_page =
-            run_contract(MonadHardfork::MonadNine, storage_reads(128)).tx_gas_used();
+            run_contract(MonadHardfork::MonadNine, storage_reads(128)).gas().total_gas_spent();
         assert_eq!(legacy_different_page, legacy_same_page);
     }
 
     #[test]
     fn test_mip8_sstore_amortizes_load_and_write_cost_per_page() {
         for spec in [MonadHardfork::MonadTen, MonadHardfork::MonadNext] {
-            let same_page = run_contract(spec, storage_writes(1)).tx_gas_used();
-            let different_page = run_contract(spec, storage_writes(128)).tx_gas_used();
+            let same_page = run_contract(spec, storage_writes(1)).gas().total_gas_spent();
+            let different_page = run_contract(spec, storage_writes(128)).gas().total_gas_spent();
             assert_eq!(same_page, 66_012);
             assert_eq!(
                 different_page - same_page,
@@ -465,9 +465,9 @@ mod tests {
         }
 
         let legacy_same_page =
-            run_contract(MonadHardfork::MonadNine, storage_writes(1)).tx_gas_used();
+            run_contract(MonadHardfork::MonadNine, storage_writes(1)).gas().total_gas_spent();
         let legacy_different_page =
-            run_contract(MonadHardfork::MonadNine, storage_writes(128)).tx_gas_used();
+            run_contract(MonadHardfork::MonadNine, storage_writes(128)).gas().total_gas_spent();
         assert_eq!(legacy_different_page, legacy_same_page);
     }
 
@@ -671,7 +671,7 @@ mod tests {
             matches!(result, ExecutionResult::Success { .. }),
             "memory-expanding CALL-like contract should succeed on {spec:?}"
         );
-        result.tx_gas_used()
+        result.gas().total_gas_spent()
     }
 
     const fn standard_memory_cost(words: u64) -> u64 {
@@ -874,7 +874,7 @@ mod tests {
                 .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
             "precompile provider should follow and restore frame specs"
         );
-        result.tx_gas_used()
+        result.gas().total_gas_spent()
     }
 
     fn run_immediate_precompile_transition(
@@ -927,7 +927,7 @@ mod tests {
                 .any(|specs| specs == [parent_spec, child_spec, parent_spec]),
             "precompile provider should restore the parent after an immediate result"
         );
-        result.tx_gas_used()
+        result.gas().total_gas_spent()
     }
 
     #[cfg(feature = "memory_limit")]

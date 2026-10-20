@@ -45,6 +45,14 @@ The caller pays `gas_limit * effective_gas_price`, unused gas is not reimbursed,
 counter is zeroed. The block beneficiary receives the priority-fee component over the full gas
 limit. Unless explicitly overridden, transactions are capped at 30 million gas.
 
+Transaction results report the full gas limit through `ExecutionResult::tx_gas_used()` for
+receipts and `result.gas().block_regular_gas_used()` for block accounting, including reverts
+and halts. Use `result.gas().total_gas_spent()` for execution consumption, including intrinsic
+gas, when estimating gas, profiling, or producing gas reports. Monad represents its minimum
+transaction charge with `ResultGas::floor_gas()`, set to the gas limit independently of
+Ethereum's EIP-7623 calldata floor. This does not change interpreter gas. System calls bypass
+transaction charging and retain execution-only gas accounting; they do not produce receipts.
+
 ### Repriced precompiles
 
 | Precompile | Address | Ethereum | Monad | Multiplier |
