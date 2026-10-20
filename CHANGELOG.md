@@ -16,6 +16,8 @@ Notable changes beginning with `monad-revm` 0.5.0 are documented in this file.
 
 ### Fixed
 
+- Emit staking delegation events before validator status changes for delegation,
+  validator registration, and reward compounding.
 - Report the full transaction gas limit for receipt and block accounting while retaining
   execution consumption for estimation and gas reports. System-call gas accounting is unchanged.
 - Aborted staking execution on database read, write, and transfer failures while preserving
