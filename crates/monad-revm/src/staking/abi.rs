@@ -1,7 +1,7 @@
 //! ABI constants for staking precompile.
 //!
-//! Gas costs for staking operations. Selectors and encoding/decoding
-//! are handled by alloy-sol-types generated types in [`super::interface`].
+//! Gas costs for staking operations. Selectors and encoding use alloy-sol-types
+//! generated types in [`super::interface`]; decoding follows the staking input rules.
 
 /// Gas costs for staking operations.
 pub mod gas {
