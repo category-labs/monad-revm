@@ -29,6 +29,7 @@ export class Engine {
     restore(snapshot: string): void;
     /**
      * Supply a historical hash for the BLOCKHASH instruction.
+     * Unsupplied hashes return zero, including after restoring a snapshot.
      */
     set_block_hash(number: number, hash: string): void;
     /**

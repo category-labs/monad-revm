@@ -143,6 +143,7 @@ export class Engine {
     }
     /**
      * Supply a historical hash for the BLOCKHASH instruction.
+     * Unsupplied hashes return zero, including after restoring a snapshot.
      * @param {number} number
      * @param {string} hash
      */
