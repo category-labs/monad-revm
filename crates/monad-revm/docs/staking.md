@@ -1,0 +1,122 @@
+# Staking precompile (`0x1000`)
+
+[Crate overview](../README.md)
+
+## Design overview
+
+Monad staking uses three validator sets and two reward views to keep consensus transitions deterministic:
+
+- `execution` set: real-time set updated by delegation/undelegation.
+- `consensus` set: top validators selected at snapshot time.
+- `snapshot` set: previous consensus image used during boundary-period rewards.
+
+Validator state is split into:
+
+- Execution state (`stake`, `commission`, `accumulated_reward_per_token`, flags, unclaimed rewards, keys/auth).
+- Epoch views (`consensus` / `snapshot` stake+commission) used by reward paths.
+
+Delegator state tracks active stake, pending stake windows (`delta_stake`, `next_delta_stake`), reward cursor (`accRewardPerToken`), and linked-list pointers used by `getDelegations` / `getDelegators` pagination.
+
+## Epoch lifecycle
+
+1. `syscallReward(blockAuthor)` distributes the per-block reward to the active validator pool.
+2. `syscallSnapshot()` enters boundary mode, copies consensus to snapshot, rebuilds consensus from execution sorted by stake.
+3. `syscallOnEpochChange(newEpoch)` finalizes the transition, updates epoch, and clears boundary mode.
+
+`blockAuthor -> validatorId` resolution is via `ValIdSecp` mapping; rewards use consensus view outside boundary and snapshot view during boundary.
+
+## Reward accounting
+
+Pool rewards use an accumulator model:
+
+- `acc += reward * UNIT_BIAS / active_stake`
+- Delegator rewards are computed from accumulator deltas.
+- Undelegation creates a `WithdrawalRequest` with an accumulator snapshot.
+- `(epoch, validator)` accumulator snapshots are reference-counted to support delayed withdrawals and epoch-window correctness.
+
+- `ACTIVE_VALIDATOR_STAKE = 10_000_000 MON`
+- `MIN_AUTH_ADDRESS_STAKE = 100_000 MON`
+- `WITHDRAWAL_DELAY = 1 epoch`
+- `MIN_EXTERNAL_REWARD = 1e9`, `MAX_EXTERNAL_REWARD = 1e25`
+- `ACTIVE_VALSET_SIZE = 200`
+
+See implementation constants in [`src/staking/constants.rs`](../src/staking/constants.rs).
+
+## Staking API surface in `monad-revm`
+
+The staking precompile is implemented for both read methods and state-mutating user/syscall methods. It is available at `0x1000`.
+
+## Read methods
+
+| Method | Selector | Gas |
+|--------|----------|-----|
+| `getEpoch()` | `0x757991a8` | `200` |
+| `getProposerValId()` | `0xfbacb0be` | `100` |
+| `getValidator(uint64)` | `0x2b6d639a` | `97,200` |
+| `getDelegator(uint64,address)` | `0x573c1ce0` | `184,900` |
+| `getWithdrawalRequest(uint64,address,uint8)` | `0x56fa2045` | `24,300` |
+| `getConsensusValidatorSet(uint32)` | `0xfb29b729` | `814,000` |
+| `getSnapshotValidatorSet(uint32)` | `0xde66a368` | `814,000` |
+| `getExecutionValidatorSet(uint32)` | `0x7cb074df` | `814,000` |
+| `getDelegations(address,uint64)` | `0x4fd66050` | `814,000` |
+| `getDelegators(uint64,address)` | `0xa0843a26` | `814,000` |
+
+## User write methods
+
+| Method | Selector | Gas | Payable |
+|--------|----------|-----|---------|
+| `addValidator(bytes,bytes,bytes)` | `0xf145204c` | `505,125` | Yes |
+| `delegate(uint64)` | `0x84994fec` | `260,850` | Yes |
+| `undelegate(uint64,uint256,uint8)` | `0x5cf41514` | `147,750` | No |
+| `withdraw(uint64,uint8)` | `0xaed2ee73` | `68,675` | No |
+| `compound(uint64)` | `0xb34fea67` | `289,325` | No |
+| `claimRewards(uint64)` | `0xa76e2ca5` | `155,375` | No |
+| `changeCommission(uint64,uint256)` | `0x9bdcc3c8` | `39,475` | No |
+| `externalReward(uint64)` | `0xe4b3303b` | `66,575` | Yes |
+
+## Syscalls
+
+| Method | Selector | Gas | Caller requirement |
+|--------|----------|-----|--------------------|
+| `syscallReward(address)` | `0x791bdcf3` | `100,000` | `SYSTEM_ADDRESS` |
+| `syscallSnapshot()` | `0x157eeb21` | `500,000` | `SYSTEM_ADDRESS` |
+| `syscallOnEpochChange(uint64)` | `0x1d4e9f02` | `50,000` | `SYSTEM_ADDRESS` |
+
+## Execution semantics
+
+- Only direct `CALL` is accepted. `DELEGATECALL`, `CALLCODE`, and `STATICCALL` are rejected.
+- Unknown/short selectors route to fallback (`"method not supported"`, 40k fallback cost).
+- Read path is dispatch-first for payability, matching C++ behavior (unknown selector fallback bypasses payability guard).
+- `getDelegator` is intentionally treated as a write selector in canonical execution because it settles delegator state via `pull_delegator_up_to_date`.
+
+## Important parity note
+
+`monad-revm` tracks C++ staking behavior closely, but there are explicit implementation notes to keep in mind:
+
+- `addValidator` currently skips signature verification and uses simplified key-to-address derivation in `write.rs`. This is intentional in the current implementation and should be considered when writing integration tests.
+
+## How staking is implemented in `monad-revm`
+
+Core modules:
+
+- [`src/staking/mod.rs`](../src/staking/mod.rs): top-level precompile dispatcher and read handlers.
+- [`src/staking/write.rs`](../src/staking/write.rs): user write handlers, syscalls, and payability logic.
+- [`src/staking/storage.rs`](../src/staking/storage.rs): storage key derivation for staking namespaces.
+- [`src/staking/types.rs`](../src/staking/types.rs): validator, delegator, withdrawal, and list types.
+- [`src/staking/interface.rs`](../src/staking/interface.rs): ABI definitions and selectors.
+- [`src/staking/constants.rs`](../src/staking/constants.rs): gas-independent staking constants.
+
+Block lifecycle helpers:
+
+- [`src/api/block.rs`](../src/api/block.rs) exposes `apply_syscall_reward`, `apply_syscall_snapshot`, `apply_syscall_on_epoch_change`, and `apply_epoch_boundary`.
+- `syscallReward` supports extended calldata (`selector + blockAuthor + reward`) for `SystemCallEvm` environments that cannot attach `msg.value` to system calls.
+
+Reader integration path:
+
+- `run_staking_with_reader(...)` supports environments that do not expose full `ContextTr`, and is used by `alloy-monad-evm` integration.
+- Ordinary direct internal `CALL`s to the native staking address are supported. Top-level and
+  internal calls routed through an EIP-7702 delegated address are rejected.
+
+## Reference
+
+[Monad staking API](https://docs.monad.xyz/reference/staking/api)
