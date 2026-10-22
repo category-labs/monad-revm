@@ -84,6 +84,116 @@ test('execution uses caller-supplied block context', () => {
   } finally { vm.free() }
 })
 
+test('missing block hashes are zero and supplied hashes survive restoration', () => {
+  for (const spec of ['monad-ten', 'monad-next']) {
+    const vm = engine(spec)
+    const restored = engine(spec)
+    try {
+      const contract = deploy(vm, '6001405f5260205ff3')
+      const supplied = '0x' + 'ab'.repeat(32)
+      for (const expected of [zero, supplied]) {
+        if (expected === supplied) vm.set_block_hash(1, supplied)
+        restored.restore(vm.snapshot())
+        for (const state of [vm, restored]) {
+          for (const trace of [false, true]) {
+            const result = execute(state, contract, '0x', { blockNumber: 2, trace })
+            assert.equal(result.success, true)
+            assert.equal(result.returnValue, expected)
+          }
+          for (const blockNumber of [1, 258]) {
+            assert.equal(execute(state, contract, '0x', { blockNumber }).returnValue, zero)
+          }
+        }
+      }
+    } finally { vm.free(); restored.free() }
+  }
+})
+
+test('invalid snapshot bytecode throws a recoverable error and preserves the engine', () => {
+  const vm = engine()
+  try {
+    const contract = deploy(vm, '602a5f555f545f5260205ff3')
+    execute(vm, contract, '0x', { commit: true })
+    vm.set_block_hash(1, '0x' + 'ab'.repeat(32))
+    const before = vm.snapshot()
+    for (const code of ['0xef01', '0xef0101' + '00'.repeat(20)]) {
+      const invalid = JSON.parse(before)
+      invalid.accounts[sender].balance = '0x2'
+      invalid.accounts[contract].code = code
+      assert.throws(() => vm.restore(JSON.stringify(invalid)), error => {
+        assert.ok(!(error instanceof WebAssembly.RuntimeError))
+        assert.match(String(error), /Invalid bytecode/)
+        return true
+      })
+      assert.equal(vm.snapshot(), before)
+      const result = execute(vm, contract)
+      assert.equal(result.success, true)
+      assert.equal(BigInt(result.returnValue), 42n)
+      assert.equal(vm.snapshot(), before)
+    }
+  } finally { vm.free() }
+})
+
+test('hash preimages include expanded memory and zero-length inputs', () => {
+  const vm = engine()
+  try {
+    const cases = [
+      ['60205f20', '00'.repeat(32), ''],
+      ['60115f5360405f20', '11' + '00'.repeat(63), '11' + '00'.repeat(31)],
+      ['5f60ff20', '', ''],
+      ['5f7f' + 'ff'.repeat(32) + '20', '', '']
+    ]
+    for (const [runtime, input, memoryBefore] of cases) {
+      const contract = deploy(vm, runtime + '5f5260205ff3')
+      const result = execute(vm, contract)
+      assert.equal(result.success, true)
+      assert.deepEqual(result.preimages, { [result.returnValue.slice(2)]: input })
+      assert.equal(result.traceTruncated, false)
+      const step = result.structLogs.find(step => step.op === 'KECCAK256')
+      assert.equal(step.memory, memoryBefore)
+      assert.equal(step.stack.length, 2)
+    }
+  } finally { vm.free() }
+})
+
+test('hashes that run out of gas do not record preimages', () => {
+  const vm = engine()
+  try {
+    const contract = deploy(vm, '60205f5260205f2000')
+    const result = execute(vm, contract, '0x', { gas: 21_020 })
+    assert.equal(result.success, false)
+    assert.deepEqual(result.preimages, {})
+    assert.equal(result.structLogs.at(-1).op, 'KECCAK256')
+    assert.match(result.structLogs.at(-1).error, /OutOfGas/)
+    assert.equal(result.traceTruncated, false)
+  } finally { vm.free() }
+})
+
+test('preimages share the trace budget without changing execution', () => {
+  const vm = engine()
+  try {
+    const cases = [
+      ['628000005f205f00', 3, 1],
+      ['5f620fffff53' + '5b'.repeat(8) + '628000005f205f00', 14, 0]
+    ]
+    for (const [runtime, stepCount, preimageCount] of cases) {
+      const contract = deploy(vm, runtime)
+      const traced = execute(vm, contract, '0x', { gas: 3_000_000 })
+      const untraced = execute(vm, contract, '0x', { gas: 3_000_000, trace: false })
+      assert.equal(traced.success, true)
+      assert.equal(traced.gasSpent, untraced.gasSpent)
+      assert.equal(traced.returnValue, untraced.returnValue)
+      assert.equal(traced.traceTruncated, true)
+      assert.equal(traced.structLogs.length, stepCount)
+      assert.equal(traced.structLogs.at(-1).op, 'KECCAK256')
+      const preimages = Object.values(traced.preimages)
+      assert.equal(preimages.length, preimageCount)
+      for (const input of preimages) assert.equal(input.length, 16 * 1024 * 1024)
+      assert.ok(JSON.stringify(traced).length < 32 * 1024 * 1024)
+    }
+  } finally { vm.free() }
+})
+
 test('package contains source provenance and no runtime build dependency', () => {
   const manifest = require('monad-revmjs/package.json')
   const info = require('monad-revmjs/build-info.json')

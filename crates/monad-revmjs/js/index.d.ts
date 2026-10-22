@@ -55,6 +55,7 @@ export interface ExecutionResult {
   gasSpent: number
   logs: { address: string, topics: string[], data: string }[]
   structLogs: TraceStep[]
+  /** Successful KECCAK256 inputs keyed by hash, both unprefixed hex; shares the trace budget. */
   preimages: Record<string, string>
   traceTruncated: boolean
 }

@@ -39,8 +39,8 @@ engine.free()
 - `fund(address, balance)`: set a development balance, preserving code and nonce.
 - `account(address)`: JSON containing balance, nonce, code and nonzero storage slots.
 - `execute(requestJson)`: execute a JSON `ExecuteRequest`, returning JSON `ExecutionResult`. TypeScript interfaces for both are exported by the package.
-- `set_block_hash(number, hash)`: supply a hash for `BLOCKHASH`; the current API accepts a 32-bit block number here.
-- `snapshot()` / `restore(snapshotJson)`: versioned engine state. Restore validates before replacing state.
+- `set_block_hash(number, hash)`: supply a hash for `BLOCKHASH`; the current API accepts a 32-bit block number here. Unsupplied hashes return zero, including after snapshot restoration. The usual `BLOCKHASH` range restrictions still apply.
+- `snapshot()` / `restore(snapshotJson)`: versioned engine state. Restore validates all fields and bytecode before replacing state; invalid snapshots throw a recoverable error and leave the engine unchanged.
 - `free()`: release the engine's WASM allocation.
 
 Execution requests explicitly supply the sender, transaction fields, block number, timestamp, block gas limit, base fee, beneficiary and prevrandao. The package has no funded accounts, wallet keys, RPC server, synthetic blockchain history or browser persistence policy. Those belong to the consuming application.
@@ -58,6 +58,6 @@ const result = JSON.parse(engine.execute(JSON.stringify({
 
 Use exact hex strings for balances, transaction values, gas prices and hashes. JSON number fields must be safe integers. `commit: false` leaves engine state unchanged. Committed reverts still apply transaction-level effects such as nonce and gas charging. Validation errors throw; execution reverts and halts return a failed result.
 
-`gasUsed` is the full submitted gas limit charged by Monad; `gasSpent` is actual consumption including intrinsic gas. Traces capture the state before each instruction, with real bytecode PCs, root depth 1, unprefixed hex stack words and contiguous hex memory. A two-byte extension occupies one trace step. Traces are capped at 100,000 steps or approximately 32 MiB; `traceTruncated` signals incomplete inspection without changing execution results. Consumers must not present a truncated trace as complete.
+`gasUsed` is the full submitted gas limit charged by Monad; `gasSpent` is actual consumption including intrinsic gas. Traces capture the state before each instruction, with real bytecode PCs, root depth 1, unprefixed hex stack words and contiguous hex memory. A two-byte extension occupies one trace step. `preimages` records inputs of successful `KECCAK256` instructions, including newly expanded zero-filled memory and empty inputs; keys and values are unprefixed hex. Traces are capped at 100,000 steps or approximately 32 MiB shared by steps and preimages; `traceTruncated` signals incomplete inspection without changing execution results. Consumers must not present a truncated trace as complete.
 
 The API is for a local development VM. It does not yet expose canonical historical chain context, reserve-balance metadata, staking system transitions, remote database callbacks, access lists, authorization lists or blob transactions. It does not provide a JSON-RPC provider. Execution is synchronous; use a worker for browser responsiveness.

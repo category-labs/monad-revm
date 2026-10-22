@@ -1,18 +1,32 @@
 use monad_revm::{extension, MonadHardfork};
 use revm::{
-    bytecode::opcode::OpCode,
+    bytecode::opcode::{OpCode, KECCAK256},
     interpreter::{
         interpreter_types::{InputsTr, Jumps, LegacyBytecode, MemoryTr},
         Interpreter, InterpreterAction,
     },
-    primitives::{hex, keccak256},
+    primitives::{hex, U256},
     Inspector,
 };
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 const MAX_STEPS: usize = 100_000;
 const MAX_TRACE_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Debug)]
+struct PendingStep {
+    index: usize,
+    hash_input: Option<Range<usize>>,
+}
+
+fn hash_input_range(stack: &[U256]) -> Option<Range<usize>> {
+    let [.., len, offset] = stack else { return None };
+    let len = usize::try_from(*len).ok()?;
+    // A zero-length hash ignores the offset, even if it does not fit in usize.
+    let start = if len == 0 { 0 } else { usize::try_from(*offset).ok()? };
+    Some(start..start.checked_add(len)?)
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +49,7 @@ pub(super) struct Trace {
     pub(super) truncated: bool,
     spec: MonadHardfork,
     bytes: usize,
-    pending: Option<usize>,
+    pending: Option<PendingStep>,
 }
 
 impl Trace {
@@ -48,6 +62,21 @@ impl Trace {
             bytes: 0,
             pending: None,
         }
+    }
+
+    fn record_preimage(&mut self, interp: &Interpreter, input: Range<usize>) {
+        let Some(hash) = interp.stack.data().last() else { return };
+        let hash = format!("{hash:064x}");
+        if self.preimages.contains_key(&hash) {
+            return;
+        }
+        let size = 128 + input.len() * 2;
+        if self.bytes + size > MAX_TRACE_BYTES {
+            self.truncated = true;
+            return;
+        }
+        self.bytes += size;
+        self.preimages.insert(hash, hex::encode(&*interp.memory.slice(input)));
     }
 }
 
@@ -72,20 +101,14 @@ impl<CTX> Inspector<CTX> for Trace {
             OpCode::new(opcode).map_or("INVALID", OpCode::as_str)
         };
         let memory = interp.memory.slice(0..interp.memory.size());
-        if opcode == 0x20 && interp.stack.data().len() >= 2 {
-            let stack = interp.stack.data();
-            let offset = usize::try_from(stack[stack.len() - 1]);
-            let len = usize::try_from(stack[stack.len() - 2]);
-            if let (Ok(offset), Ok(len)) = (offset, len) {
-                if let Some(end) = offset.checked_add(len) {
-                    if end <= memory.len() {
-                        let input = &memory[offset..end];
-                        self.preimages.insert(hex::encode(keccak256(input)), hex::encode(input));
-                    }
-                }
-            }
-        }
-        self.pending = Some(self.steps.len());
+        self.pending = Some(PendingStep {
+            index: self.steps.len(),
+            hash_input: if opcode == KECCAK256 {
+                hash_input_range(interp.stack.data())
+            } else {
+                None
+            },
+        });
         self.steps.push(Step {
             pc,
             op: op.to_owned(),
@@ -99,12 +122,17 @@ impl<CTX> Inspector<CTX> for Trace {
     }
 
     fn step_end(&mut self, interp: &mut Interpreter, _ctx: &mut CTX) {
-        if let Some(index) = self.pending.take() {
-            let step = &mut self.steps[index];
+        if let Some(pending) = self.pending.take() {
+            let step = &mut self.steps[pending.index];
             step.gas_cost = step.gas.saturating_sub(interp.gas.remaining());
             if let Some(InterpreterAction::Return(result)) = &interp.bytecode.action {
                 if !result.result.is_ok() {
                     step.error = Some(format!("{:?}", result.result));
+                }
+            }
+            if interp.bytecode.action.is_none() {
+                if let Some(input) = pending.hash_input {
+                    self.record_preimage(interp, input);
                 }
             }
         }

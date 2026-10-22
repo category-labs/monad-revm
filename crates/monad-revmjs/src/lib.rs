@@ -1,11 +1,13 @@
 //! JavaScript-accessible execution, state and inspection for a local Monad VM.
 
+mod database;
 mod trace;
 
+use database::LocalDB;
 use monad_revm::{monad_context_with_db, MonadBuilder, MonadCfgEnv, MonadHardfork};
 use revm::{
     context::{result::ExecutionResult, BlockEnv, TxEnv},
-    database::{AccountState, InMemoryDB},
+    database::AccountState,
     inspector::InspectEvm,
     primitives::{hex, Address, Bytes, B256, U256},
     state::{AccountInfo, Bytecode},
@@ -62,7 +64,7 @@ struct Snapshot {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct Engine {
-    db: InMemoryDB,
+    db: LocalDB,
     spec: MonadHardfork,
     chain_id: u64,
 }
@@ -85,7 +87,7 @@ impl Engine {
             "monad-next" => MonadHardfork::MonadNext,
             _ => return Err("Supported specifications: monad-ten, monad-next".into()),
         };
-        Ok(Self { db: InMemoryDB::default(), spec, chain_id: chain_id.into() })
+        Ok(Self { db: LocalDB::default(), spec, chain_id: chain_id.into() })
     }
 
     /// Set a development account's balance without replacing its code or nonce.
@@ -105,6 +107,7 @@ impl Engine {
     }
 
     /// Supply a historical hash for the BLOCKHASH instruction.
+    /// Unsupplied hashes return zero, including after restoring a snapshot.
     pub fn set_block_hash(&mut self, number: u32, hash: &str) -> Result<(), String> {
         let hash = B256::from_str(hash).map_err(|e| e.to_string())?;
         self.db.cache.block_hashes.insert(U256::from(number), hash);
@@ -218,10 +221,12 @@ impl Engine {
         {
             return Err("Incompatible Monad state version, specification or chain ID".into());
         }
-        let mut db = InMemoryDB::default();
+        let mut db = LocalDB::default();
         for (addr, account) in snapshot.accounts {
             let addr = address(&addr)?;
             let code = Bytes::from_str(&account.code).map_err(|e| e.to_string())?;
+            let code = Bytecode::new_raw_checked(code)
+                .map_err(|e| format!("Invalid bytecode for {addr:#x}: {e}"))?;
             db.insert_account_info(
                 addr,
                 AccountInfo {
@@ -229,7 +234,7 @@ impl Engine {
                     nonce: account.nonce,
                     ..Default::default()
                 }
-                .with_code(Bytecode::new_raw(code)),
+                .with_code(code),
             );
             for (slot, value) in account.storage {
                 db.insert_account_storage(addr, word(&slot)?, word(&value)?)

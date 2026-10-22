@@ -1,6 +1,7 @@
 //! Native execution and state regressions for the browser API.
 
 use monad_revmjs::Engine;
+use revm::primitives::{hex, keccak256};
 use serde_json::{json, Value};
 
 const SENDER: &str = "0x1111111111111111111111111111111111111111";
@@ -12,23 +13,26 @@ fn engine(spec: &str) -> Engine {
 }
 
 fn execute(engine: &mut Engine, to: Option<&str>, data: &str, commit: bool) -> Value {
+    execute_with_options(engine, to, data, json!({ "commit": commit }))
+}
+
+fn execute_with_options(
+    engine: &mut Engine,
+    to: Option<&str>,
+    data: &str,
+    options: Value,
+) -> Value {
     let sender: Value = serde_json::from_str(&engine.account(SENDER).unwrap()).unwrap();
-    serde_json::from_str(
-        &engine
-            .execute(
-                &json!({
-                    "from": SENDER, "to": to, "data": data, "value": "0x0", "gas": 1_000_000,
-                    "gasPrice": "0x1", "nonce": sender["nonce"], "blockNumber": 1,
-                    "timestamp": 1_800_000_000, "commit": commit, "trace": true,
-                    "blockGasLimit": 30_000_000, "baseFee": "0x0",
-                    "beneficiary": "0x0000000000000000000000000000000000000000",
-                    "prevrandao": format!("0x{:064x}", 0)
-                })
-                .to_string(),
-            )
-            .unwrap(),
-    )
-    .unwrap()
+    let mut request = json!({
+        "from": SENDER, "to": to, "data": data, "value": "0x0", "gas": 1_000_000,
+        "gasPrice": "0x1", "nonce": sender["nonce"], "blockNumber": 1,
+        "timestamp": 1_800_000_000, "commit": false, "trace": true,
+        "blockGasLimit": 30_000_000, "baseFee": "0x0",
+        "beneficiary": "0x0000000000000000000000000000000000000000",
+        "prevrandao": format!("0x{:064x}", 0)
+    });
+    request.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
+    serde_json::from_str(&engine.execute(&request.to_string()).unwrap()).unwrap()
 }
 
 fn deploy(engine: &mut Engine, runtime: &str) -> String {
@@ -109,6 +113,143 @@ fn malformed_restore_is_atomic_and_spec_specific() {
     assert!(vm.restore("{}").is_err());
     assert_eq!(vm.snapshot().unwrap(), before);
     assert!(engine("monad-ten").restore(&before).is_err());
+}
+
+#[test]
+fn block_hashes_require_supplied_history_before_and_after_restore() {
+    for spec in ["monad-ten", "monad-next"] {
+        let mut vm = engine(spec);
+        let contract = deploy(&mut vm, "6001405f5260205ff3");
+        let mut restored = engine(spec);
+        let supplied = format!("0x{}", "ab".repeat(32));
+        for expected in [format!("0x{:064x}", 0), supplied.clone()] {
+            if expected == supplied {
+                vm.set_block_hash(1, &supplied).unwrap();
+            }
+            restored.restore(&vm.snapshot().unwrap()).unwrap();
+            for vm in [&mut vm, &mut restored] {
+                for trace in [false, true] {
+                    let result = execute_with_options(
+                        vm,
+                        Some(&contract),
+                        "0x",
+                        json!({ "blockNumber": 2, "trace": trace }),
+                    );
+                    assert_eq!(result["success"], true);
+                    assert_eq!(result["returnValue"], expected);
+                }
+                for number in [1, 258] {
+                    let result = execute_with_options(
+                        vm,
+                        Some(&contract),
+                        "0x",
+                        json!({ "blockNumber": number }),
+                    );
+                    assert_eq!(result["returnValue"], format!("0x{:064x}", 0));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_snapshot_bytecode_returns_error_and_preserves_usable_state() {
+    let mut vm = engine("monad-next");
+    let contract = deploy(&mut vm, "602a5f555f545f5260205ff3");
+    execute(&mut vm, Some(&contract), "0x", true);
+    vm.set_block_hash(1, &format!("0x{}", "ab".repeat(32))).unwrap();
+    let before = vm.snapshot().unwrap();
+    for code in ["0xef01".to_owned(), format!("0xef0101{}", "00".repeat(20))] {
+        let mut invalid: Value = serde_json::from_str(&before).unwrap();
+        invalid["accounts"][SENDER]["balance"] = json!("0x2");
+        invalid["accounts"][&contract]["code"] = json!(code);
+        assert!(vm.restore(&invalid.to_string()).unwrap_err().contains("Invalid bytecode"));
+        assert_eq!(vm.snapshot().unwrap(), before);
+        let result = execute(&mut vm, Some(&contract), "0x", false);
+        assert_eq!(result["success"], true);
+        assert_eq!(result["returnValue"], format!("0x{:064x}", 42));
+        assert_eq!(vm.snapshot().unwrap(), before);
+    }
+}
+
+#[test]
+fn hash_preimages_include_expanded_memory_and_empty_inputs() {
+    let cases = [
+        ("60205f20".to_owned(), vec![0; 32], String::new()),
+        (
+            "60115f5360405f20".to_owned(),
+            [vec![0x11], vec![0; 63]].concat(),
+            format!("11{}", "00".repeat(31)),
+        ),
+        ("5f60ff20".to_owned(), Vec::new(), String::new()),
+        (format!("5f7f{}20", "ff".repeat(32)), Vec::new(), String::new()),
+    ];
+    let mut vm = engine("monad-next");
+    for (runtime, input, memory_before) in cases {
+        let contract = deploy(&mut vm, &format!("{runtime}5f5260205ff3"));
+        let result = execute(&mut vm, Some(&contract), "0x", false);
+        let hash = hex::encode(keccak256(&input));
+        assert_eq!(result["success"], true);
+        assert_eq!(result["returnValue"], format!("0x{hash}"));
+        assert_eq!(result["preimages"], json!({ hash: hex::encode(input) }));
+        assert_eq!(result["traceTruncated"], false);
+        let step = result["structLogs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|step| step["op"] == "KECCAK256")
+            .unwrap();
+        assert_eq!(step["memory"], memory_before);
+        assert_eq!(step["stack"].as_array().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn failed_hash_does_not_record_a_preimage() {
+    let mut vm = engine("monad-next");
+    let contract = deploy(&mut vm, "60205f5260205f2000");
+    let result = execute_with_options(&mut vm, Some(&contract), "0x", json!({ "gas": 21_020 }));
+    assert_eq!(result["success"], false);
+    assert_eq!(result["preimages"], json!({}));
+    let step = result["structLogs"].as_array().unwrap().last().unwrap();
+    assert_eq!(step["op"], "KECCAK256");
+    assert!(step["error"].as_str().unwrap().contains("OutOfGas"));
+    assert_eq!(result["traceTruncated"], false);
+}
+
+#[test]
+fn preimages_count_toward_trace_budget_without_changing_execution() {
+    let mut vm = engine("monad-next");
+    let cases = [
+        // The preimage fits, but leaves too little budget for the next step.
+        ("628000005f205f00".to_owned(), 3, 1),
+        // Earlier steps consume enough budget to exclude the preimage itself.
+        (format!("5f620fffff53{}628000005f205f00", "5b".repeat(8)), 14, 0),
+    ];
+    for (runtime, step_count, preimage_count) in cases {
+        let contract = deploy(&mut vm, &runtime);
+        let traced =
+            execute_with_options(&mut vm, Some(&contract), "0x", json!({ "gas": 3_000_000 }));
+        let untraced = execute_with_options(
+            &mut vm,
+            Some(&contract),
+            "0x",
+            json!({ "gas": 3_000_000, "trace": false }),
+        );
+        assert_eq!(traced["success"], true);
+        assert_eq!(traced["gasSpent"], untraced["gasSpent"]);
+        assert_eq!(traced["returnValue"], untraced["returnValue"]);
+        assert_eq!(traced["traceTruncated"], true);
+        let steps = traced["structLogs"].as_array().unwrap();
+        assert_eq!(steps.len(), step_count);
+        assert_eq!(steps.last().unwrap()["op"], "KECCAK256");
+        let preimages = traced["preimages"].as_object().unwrap();
+        assert_eq!(preimages.len(), preimage_count);
+        for input in preimages.values() {
+            assert_eq!(input.as_str().unwrap().len(), 16 * 1024 * 1024);
+        }
+        assert!(traced.to_string().len() < 32 * 1024 * 1024);
+    }
 }
 
 #[test]
