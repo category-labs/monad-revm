@@ -29,11 +29,6 @@ cargo fmt --all --check
 
 See the [WASM build guide](crates/monad-revmjs/docs/development.md) for its additional toolchain requirements.
 
-## Related projects
-
-- [`alloy-monad-evm`](https://github.com/category-labs/alloy-monad-evm): Alloy integration for the engine.
-- [Foundry Monad integration](https://github.com/foundry-rs/foundry/pull/15343): Forge, Anvil, Cast and Chisel support.
-
 ## License
 
 [MIT](LICENSE). Contributions are licensed under the same terms unless explicitly stated otherwise.
