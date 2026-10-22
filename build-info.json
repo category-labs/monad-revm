@@ -1,0 +1,9 @@
+{
+  "sourceRepository": "https://github.com/category-labs/monad-revm",
+  "sourceRevision": "48d5229a64a05b9796d643945a1ef16ba00d3189",
+  "sourceDirty": false,
+  "cargoLockSha256": "5d2df7652961e1a825cad7a365a86cf108951b3d6c5336f039e932dacea72299",
+  "rustToolchain": "1.91",
+  "wasmBindgen": "0.2.128",
+  "target": "wasm32-unknown-unknown"
+}

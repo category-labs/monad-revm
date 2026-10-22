@@ -1,0 +1,41 @@
+{
+  "name": "monad-revmjs",
+  "version": "0.1.0-preview.1",
+  "description": "Monad execution, state and inspection through WebAssembly",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/monad_revmjs.js",
+  "module": "./dist/monad_revmjs.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./dist/monad_revmjs.js"
+    },
+    "./wasm": "./dist/monad_revmjs_bg.wasm",
+    "./package.json": "./package.json",
+    "./build-info.json": "./build-info.json"
+  },
+  "files": [
+    "dist",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "build-info.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/category-labs/monad-revm.git",
+    "directory": "crates/monad-revmjs"
+  },
+  "keywords": [
+    "monad",
+    "evm",
+    "revm",
+    "wasm"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}
