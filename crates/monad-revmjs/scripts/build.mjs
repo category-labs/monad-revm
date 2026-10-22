@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -31,6 +31,7 @@ if (manifest.version !== crateVersion) throw new Error('Cargo and npm package ve
 writeFileSync(path.join(output, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
 copyFileSync(path.join(crate, 'js/index.d.ts'), path.join(output, 'index.d.ts'))
 copyFileSync(path.join(crate, 'README.md'), path.join(output, 'README.md'))
+cpSync(path.join(crate, 'docs'), path.join(output, 'docs'), { recursive: true })
 copyFileSync(path.join(root, 'LICENSE'), path.join(output, 'LICENSE'))
 writeFileSync(path.join(output, 'build-info.json'), JSON.stringify({
   sourceRepository: 'https://github.com/category-labs/monad-revm',

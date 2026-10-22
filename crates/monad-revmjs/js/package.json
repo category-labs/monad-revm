@@ -16,7 +16,7 @@
     "./package.json": "./package.json",
     "./build-info.json": "./build-info.json"
   },
-  "files": ["dist", "index.d.ts", "README.md", "LICENSE", "build-info.json"],
+  "files": ["dist", "docs", "index.d.ts", "README.md", "LICENSE", "build-info.json"],
   "repository": {
     "type": "git",
     "url": "https://github.com/category-labs/monad-revm.git",
