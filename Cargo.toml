@@ -39,3 +39,12 @@ alloy-sol-types = { version = "1.5.2", default-features = false }
 # misc
 serde = { version = "1", default-features = false, features = ["derive", "rc"] }
 rstest = "0.24"
+
+# Browser artifacts favor size; native release builds retain their defaults.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

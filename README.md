@@ -490,6 +490,8 @@ monad-revm/
 
 ## Integration layers
 
+The [monad-revmjs browser package](crates/monad-revmjs/README.md) exposes the engine through WebAssembly, with JavaScript bindings and TypeScript declarations. It owns a local database and optional inspection; consuming applications supply block context, provider behavior and persistence. Prebuilt packages require no Rust toolchain at installation time.
+
 - [`alloy-monad-evm`](https://github.com/category-labs/alloy-monad-evm): Alloy `Evm` / `EvmFactory` wrapper over `monad-revm`.
 - [Foundry Monad integration](https://github.com/foundry-rs/foundry/pull/15343): Forge, Anvil, Cast, and Chisel support.
 
