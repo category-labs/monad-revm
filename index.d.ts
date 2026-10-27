@@ -3,8 +3,34 @@ export type { InitInput, InitOutput, SyncInitInput } from './dist/monad_revmjs.j
 
 export type MonadSpec = 'monad-ten' | 'monad-next'
 
+export interface AccessListEntry {
+  address: string
+  storageKeys: string[]
+}
+
+/** Signed authorization; chainId, nonce, r and s are exact hex quantities. */
+export interface AuthorizationEntry {
+  chainId: string
+  address: string
+  nonce: string
+  yParity: number
+  r: string
+  s: string
+}
+
 /** JSON input to Engine.execute. Integers represented as numbers must be safe integers. */
 export interface ExecuteRequest {
+  /** Omitted types are inferred from authorization, fee and access-list fields. */
+  type?: 0 | 1 | 2 | 4
+  accessList?: AccessListEntry[]
+  authorizationList?: AuthorizationEntry[]
+  /** Block history. Current-block arrays describe preceding transactions only. */
+  chainContext?: {
+    parentSendersAndAuthorities?: string[]
+    grandparentSendersAndAuthorities?: string[]
+    currentBlockSenders?: string[]
+    currentBlockAuthorities?: string[][]
+  }
   from: string
   to: string | null
   data: string
@@ -45,6 +71,10 @@ export interface TraceStep {
 
 /** JSON output from Engine.execute. Validation failures throw instead of returning a result. */
 export interface ExecutionResult {
+  /** Recoverable authorities, including authorizations skipped for chain ID or nonce. */
+  authorizationAuthorities: string[]
+  /** Executed runtime code, with delegation resolved; empty when tracing is disabled. */
+  codeByAddress: Record<string, string>
   success: boolean
   error: string | null
   returnValue: string

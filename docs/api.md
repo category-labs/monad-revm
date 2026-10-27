@@ -45,6 +45,10 @@ engine.free()
 
 Execution requests explicitly supply the sender, transaction fields, block number, timestamp, block gas limit, base fee, beneficiary and prevrandao. The package has no funded accounts, wallet keys, RPC server, synthetic blockchain history or browser persistence policy. Those belong to the consuming application.
 
+Transactions support types `0`, `1`, `2` and `4`. Set `type` explicitly when preserving a signed transaction's envelope; omitted types are inferred from authorization, priority-fee and access-list fields. `accessList` entries contain an address and 32-byte storage keys. `authorizationList` entries contain `chainId`, `address`, `nonce`, `yParity`, `r` and `s`; use exact hex quantities for authorization chain IDs, nonces and signature scalars. Signature recovery and authorization processing run in Rust. Invalid authorizations may be skipped according to EIP-7702; malformed transaction envelopes throw without committing state. Type 4 requires a destination, a priority fee and a nonempty authorization list. Applied delegations and authority nonces survive an execution revert.
+
+For reserve-balance decisions, pass `chainContext.parentSendersAndAuthorities` and `grandparentSendersAndAuthorities`. Optional `currentBlockSenders` and `currentBlockAuthorities` describe preceding transactions in the current block and must have matching lengths. The engine appends this transaction's sender and recovered authorities. `authorizationAuthorities` in the result supplies those recoverable addresses for the consumer's block history, including tuples skipped for chain ID or nonce. Omitted history is empty and cannot reproduce historical reserve behavior.
+
 ```js
 const result = JSON.parse(engine.execute(JSON.stringify({
   from: '0x1111111111111111111111111111111111111111',
@@ -62,4 +66,6 @@ Use exact hex strings for balances, transaction values, gas prices and hashes. J
 
 With `trace: true`, `consoleCalls` contains the raw `0x` calldata from `STATICCALL`s to the Hardhat console address, in execution order. Decode these payloads in the consumer using the console ABI. Console calls survive reverts and continue after instruction-trace truncation; they do not change execution results or gas accounting. With `trace: false`, `consoleCalls` is empty.
 
-The API is for a local development VM. It does not yet expose canonical historical chain context, reserve-balance metadata, staking system transitions, remote database callbacks, access lists, authorization lists or blob transactions. It does not provide a JSON-RPC provider. Execution is synchronous; use a worker for browser responsiveness.
+With tracing enabled, `codeByAddress` records the runtime bytecode actually executed at each called address, with EIP-7702 delegation resolved. It shares the trace byte budget and remains available for reverted or simulated executions. Debuggers can use this code after a later delegation change without querying current account code. Contract creation code remains in the creation frame's input. Without tracing, the map is empty.
+
+The API is for a local development VM. It does not provide historical context discovery, staking system transitions, remote database callbacks or a JSON-RPC provider. Blob transactions are unsupported by Monad. Execution is synchronous; use a worker for browser responsiveness.
