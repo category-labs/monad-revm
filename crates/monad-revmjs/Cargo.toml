@@ -1,6 +1,6 @@
 [package]
 name = "monad-revmjs"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 description = "Browser WebAssembly bindings for monad-revm"
 edition.workspace = true
 rust-version.workspace = true

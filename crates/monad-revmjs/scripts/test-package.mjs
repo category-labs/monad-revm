@@ -33,8 +33,15 @@ try {
       cwd: path.resolve(crate, '../..'), stdio: ['ignore', nativeOutput, 'inherit']
     })
   } finally { closeSync(nativeOutput) }
-  run(process.execPath, ['--test', path.join(crate, 'tests/package.test.mjs'), path.join(crate, 'tests/precompiles.test.mjs')], {
-    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project, MONAD_REVMJS_NATIVE_RESULTS: nativeResults }
+  const nativeTransactions = path.join(project, 'native-transactions.json')
+  const transactionOutput = openSync(nativeTransactions, 'w')
+  try {
+    run('cargo', ['+1.91', 'run', '--locked', '-p', 'monad-revmjs', '--example', 'transaction_results', '--features', 'monad-revm/default'], {
+      cwd: path.resolve(crate, '../..'), stdio: ['ignore', transactionOutput, 'inherit']
+    })
+  } finally { closeSync(transactionOutput) }
+  run(process.execPath, ['--test', path.join(crate, 'tests/package.test.mjs'), path.join(crate, 'tests/precompiles.test.mjs'), path.join(crate, 'tests/transactions.test.mjs')], {
+    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project, MONAD_REVMJS_NATIVE_RESULTS: nativeResults, MONAD_REVMJS_NATIVE_TRANSACTIONS: nativeTransactions }
   })
   console.log(`Verified installable package: ${path.join(output, archive.filename)}`)
 } finally {

@@ -1,6 +1,6 @@
 {
   "name": "monad-revmjs",
-  "version": "0.1.0-preview.1",
+  "version": "0.1.0-preview.2",
   "description": "Monad execution, state and inspection through WebAssembly",
   "license": "MIT",
   "type": "module",

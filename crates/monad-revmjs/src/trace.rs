@@ -6,7 +6,7 @@ use revm::{
         interpreter_types::{InputsTr, Jumps, LegacyBytecode, MemoryTr},
         CallInputs, CallOutcome, CallScheme, Interpreter, InterpreterAction,
     },
-    primitives::{address, hex, U256},
+    primitives::{address, hex, Address, U256},
     Inspector,
 };
 use serde::Serialize;
@@ -47,11 +47,13 @@ pub(super) struct Step {
 pub(super) struct Trace {
     pub(super) steps: Vec<Step>,
     pub(super) preimages: BTreeMap<String, String>,
+    pub(super) code_by_address: BTreeMap<String, String>,
     pub(super) console_calls: Vec<String>,
     pub(super) truncated: bool,
     spec: MonadHardfork,
     bytes: usize,
     pending: Option<PendingStep>,
+    pending_code_address: Option<Address>,
 }
 
 impl Trace {
@@ -59,11 +61,13 @@ impl Trace {
         Self {
             steps: Vec::new(),
             preimages: BTreeMap::new(),
+            code_by_address: BTreeMap::new(),
             console_calls: Vec::new(),
             truncated: false,
             spec,
             bytes: 0,
             pending: None,
+            pending_code_address: None,
         }
     }
 
@@ -84,7 +88,29 @@ impl Trace {
 }
 
 impl<CTX: ContextTr> Inspector<CTX> for Trace {
+    fn initialize_interp(&mut self, interp: &mut Interpreter, _ctx: &mut CTX) {
+        // Capture the executed code, including resolved EIP-7702 delegation.
+        // Creation code is already recoverable from the creation frame's input.
+        let original_address = self.pending_code_address.take();
+        let Some(resolved_address) = interp.input.bytecode_address() else { return };
+        let address = original_address.unwrap_or(*resolved_address);
+        let address = format!("{address:#x}");
+        if self.truncated || self.code_by_address.contains_key(&address) {
+            return;
+        }
+        let code = interp.bytecode.bytecode_slice();
+        let size = 96 + code.len() * 2;
+        if self.bytes + size > MAX_TRACE_BYTES {
+            self.truncated = true;
+            return;
+        }
+        self.bytes += size;
+        self.code_by_address.insert(address, hex::encode_prefixed(code));
+    }
+
     fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
+        // Monad resolves inputs.bytecode_address to the delegation target after this hook.
+        self.pending_code_address = Some(inputs.bytecode_address);
         if inputs.scheme == CallScheme::StaticCall
             && inputs.target_address == address!("000000000000000000636f6e736f6c652e6c6f67")
         {
