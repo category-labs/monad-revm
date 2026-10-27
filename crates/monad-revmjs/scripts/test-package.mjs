@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,8 +24,17 @@ try {
   run(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', path.join(output, archive.filename)], { cwd: project })
   const installed = JSON.parse(readFileSync(path.join(project, 'node_modules/monad-revmjs/package.json'), 'utf8'))
   if (installed.scripts || installed.dependencies) throw new Error('The runtime package must be self-contained with no install scripts')
-  run(process.execPath, ['--test', path.join(crate, 'tests/package.test.mjs')], {
-    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project }
+  const nativeResults = path.join(project, 'native-precompiles.json')
+  const nativeOutput = openSync(nativeResults, 'w')
+  try {
+    // Enable the normal native crypto backends in this separate host build.
+    // The browser artifact was built with the wrapper's pure-Rust dependencies.
+    run('cargo', ['+1.91', 'run', '--locked', '-p', 'monad-revmjs', '--example', 'precompile_results', '--features', 'monad-revm/default'], {
+      cwd: path.resolve(crate, '../..'), stdio: ['ignore', nativeOutput, 'inherit']
+    })
+  } finally { closeSync(nativeOutput) }
+  run(process.execPath, ['--test', path.join(crate, 'tests/package.test.mjs'), path.join(crate, 'tests/precompiles.test.mjs')], {
+    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project, MONAD_REVMJS_NATIVE_RESULTS: nativeResults }
   })
   console.log(`Verified installable package: ${path.join(output, archive.filename)}`)
 } finally {

@@ -24,6 +24,8 @@ node crates/monad-revmjs/scripts/test-package.mjs
 
 The build writes `target/monad-revmjs/package`. The package test packs that directory, installs the tarball into an isolated project with scripts disabled, then exercises the installed module. The resulting archive is `target/monad-revmjs/monad-revmjs-0.1.0-preview.1.tgz`. All generated artifacts are ignored by Git in the source branch. `build-info.json` records the source revision, dirty-state flag, toolchain and lockfile checksum.
 
+The package test also compares shared [precompile vectors](../tests/fixtures/precompiles.json) against a separate native build with `monad-revm/default` enabled (including secp256k1, c-kzg and blst). It checks both forks, complete traces, return data, gas consumption, simulation isolation and committed sender state. Valid inputs run with exact gas, surplus gas and one gas too little; malformed inputs distinguish a failed call from a successful call with empty output. Fixture entries record their sources. This covers stateless precompiles at `0x01`–`0x11` and `0x0100`; staking and reserve-balance system contracts need separate stateful coverage.
+
 On macOS, a compatible Xcode Command Line Tools SDK must be available; select one through `SDKROOT` if needed.
 
 ## Distribution
