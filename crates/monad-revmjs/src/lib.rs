@@ -2,9 +2,11 @@
 
 mod database;
 mod trace;
+mod transaction;
 
 use database::LocalDB;
 use monad_revm::{monad_context_with_db, MonadBuilder, MonadCfgEnv, MonadHardfork};
+use revm::context_interface::transaction::AuthorizationTr;
 use revm::{
     context::{result::ExecutionResult, BlockEnv, TxEnv},
     database::AccountState,
@@ -17,11 +19,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, str::FromStr};
 use trace::Trace;
+use transaction::{AccessEntry, AuthorizationEntry, ChainContext};
 use wasm_bindgen::prelude::*;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Transaction {
+    #[serde(default, rename = "type")]
+    tx_type: Option<u8>,
+    #[serde(default)]
+    access_list: Vec<AccessEntry>,
+    #[serde(default)]
+    authorization_list: Vec<AuthorizationEntry>,
+    #[serde(default)]
+    chain_context: ChainContext,
     from: String,
     to: Option<String>,
     data: String,
@@ -127,7 +138,42 @@ impl Engine {
             .map(u128::try_from)
             .transpose()
             .map_err(|_| "Priority fee exceeds u128")?;
+        let tx_type = request.tx_type.unwrap_or_else(|| {
+            if !request.authorization_list.is_empty() {
+                4
+            } else if priority_fee.is_some() {
+                2
+            } else if !request.access_list.is_empty() {
+                1
+            } else {
+                0
+            }
+        });
+        if !matches!(tx_type, 0 | 1 | 2 | 4) {
+            return Err("Unsupported transaction type; expected 0, 1, 2 or 4".into());
+        }
+        if (tx_type == 0 && !request.access_list.is_empty())
+            || (tx_type != 4 && !request.authorization_list.is_empty())
+            || (matches!(tx_type, 0 | 1) && priority_fee.is_some())
+        {
+            return Err("Transaction fields do not match its type".into());
+        }
+        let access_list =
+            request.access_list.iter().map(AccessEntry::parse).collect::<Result<Vec<_>, _>>()?;
+        let authorizations = request
+            .authorization_list
+            .iter()
+            .map(AuthorizationEntry::parse)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Consensus participants include recoverable authorities even when an
+        // authorization is later skipped for its chain ID or nonce.
+        let authorities: Vec<_> =
+            authorizations.iter().filter_map(AuthorizationTr::authority).collect();
+        let chain = request.chain_context.parse(address(&request.from)?, authorities.clone())?;
         let mut tx = TxEnv::builder()
+            .tx_type(Some(tx_type))
+            .access_list(access_list.into())
+            .authorization_list_signed(authorizations)
             .caller(address(&request.from)?)
             .value(word(&request.value)?)
             .gas_limit(request.gas)
@@ -151,14 +197,12 @@ impl Engine {
             prevrandao: Some(B256::from_str(&request.prevrandao).map_err(|e| e.to_string())?),
             ..Default::default()
         };
-        let ctx = monad_context_with_db(self.db.clone()).with_cfg(cfg).with_block(block);
+        let tx = tx.build().map_err(|e| format!("Invalid transaction fields: {e}"))?;
+        let mut ctx = monad_context_with_db(self.db.clone()).with_cfg(cfg).with_block(block);
+        ctx.chain = chain;
         let mut evm = ctx.build_monad_with_inspector(Trace::new(self.spec));
-        let output = if request.trace {
-            evm.inspect_tx(tx.build_fill())
-        } else {
-            evm.transact(tx.build_fill())
-        }
-        .map_err(|e| format!("Transaction validation failed: {e:?}"))?;
+        let output = if request.trace { evm.inspect_tx(tx) } else { evm.transact(tx) }
+            .map_err(|e| format!("Transaction validation failed: {e:?}"))?;
         let result = &output.result;
         let error = match result {
             ExecutionResult::Success { .. } => None,
@@ -177,7 +221,9 @@ impl Engine {
             "createdAddress": result.created_address().map(|a| format!("{a:#x}")),
             "gasUsed": result.tx_gas_used(), "gasSpent": result.gas().total_gas_spent(),
             "logs": logs, "structLogs": trace.steps, "preimages": trace.preimages,
+            "codeByAddress": trace.code_by_address,
             "consoleCalls": trace.console_calls,
+            "authorizationAuthorities": authorities.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
             "traceTruncated": trace.truncated
         });
         if request.commit {

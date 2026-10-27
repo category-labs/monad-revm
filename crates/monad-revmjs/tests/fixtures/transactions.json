@@ -1,0 +1,1217 @@
+{
+  "description": "Deterministic local transaction vectors. Authorizations signed with ethers 6.14.0 using private keys 1 (payer) and 2 (authority). Expected semantics follow EIP-2930, EIP-7702 and monad-revm reserve/delegated-creation rules; bytecode is embedded in the account fixtures.",
+  "payer": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+  "authority": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+  "accounts": {
+    "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf": {
+      "balance": "0x056bc75e2d63100000"
+    },
+    "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+      "balance": "0x056bc75e2d63100000"
+    },
+    "0x2222222222222222222222222222222222222222": {
+      "code": "0x602a5f5500"
+    }
+  },
+  "cases": [
+    {
+      "name": "type-0-empty-access-list",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 0,
+            "to": "0x2222222222222222222222222222222222222222",
+            "accessList": []
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {}
+        }
+      ]
+    },
+    {
+      "name": "type-1-empty-access-list",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 1,
+            "to": "0x2222222222222222222222222222222222222222",
+            "accessList": []
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {}
+        }
+      ]
+    },
+    {
+      "name": "type-2-empty-access-list",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 2,
+            "to": "0x2222222222222222222222222222222222222222",
+            "priorityFee": "0x0",
+            "accessList": []
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {}
+        }
+      ]
+    },
+    {
+      "name": "type-1-warm-storage",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f545f5260205ff3",
+          "storage": {
+            "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000007"
+          }
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 1,
+            "to": "0x2222222222222222222222222222222222222222",
+            "accessList": [
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ]
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000007",
+            "gasSpent": 25412
+          },
+          "accounts": {},
+          "opcodeCosts": {
+            "SLOAD": 100
+          }
+        }
+      ]
+    },
+    {
+      "name": "type-2-warm-storage",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f545f5260205ff3",
+          "storage": {
+            "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000007"
+          }
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 2,
+            "to": "0x2222222222222222222222222222222222222222",
+            "priorityFee": "0x0",
+            "accessList": [
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ]
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000007",
+            "gasSpent": 25412
+          },
+          "accounts": {},
+          "opcodeCosts": {
+            "SLOAD": 100
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate-access-list-charged",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f545f5260205ff3",
+          "storage": {
+            "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000007"
+          }
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 1,
+            "to": "0x2222222222222222222222222222222222222222",
+            "accessList": [
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ]
+              },
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ]
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000007",
+            "gasSpent": 29712
+          },
+          "accounts": {},
+          "opcodeCosts": {
+            "SLOAD": 100
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegate-and-execute",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "codeByAddress": {
+              "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": "0x602a5f5500"
+            }
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            },
+            "0x2222222222222222222222222222222222222222": {
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wildcard-chain-authorization",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x00",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 0,
+                "r": "0x44a88a56e8a6085be7769186501fc09cffef81325df01766b4ef3f349de79faa",
+                "s": "0x4a4e7dbb67a21c3d91c612fb1a87d6c5e7cb264778e2d5456b9b25d030048066"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "codeByAddress": {
+              "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": "0x602a5f5500"
+            }
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "self-sponsored-authorization",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x01",
+                "yParity": 0,
+                "r": "0xb0b24922893021bed1f342e353b84f1d85cbd69b839371f2e93fd17e164e9b5e",
+                "s": "0x506e2bae06d2873d4cef62ed12663d36fa16f5a5451d13ae449f65886a14b002"
+              }
+            ],
+            "to": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf": {
+              "nonce": 2,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "authorization-persists-on-revert",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x60635f555f5ffd"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": false,
+            "error": "revert",
+            "codeByAddress": {
+              "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": "0x60635f555f5ffd"
+            }
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf": {
+              "nonce": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wrong-chain",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x01",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0x957ba063beb8d11cd548f4d4c4a5e80c252e4fc38fad8d8f336417f32e20b1de",
+                "s": "0x4ba215fe71e38ba6566cceb6469c3872e2a5260cd2bb020c4ced629909b2b936"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 0,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale-nonce",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x03",
+                "yParity": 0,
+                "r": "0xd50a6bf43139da546dcddbe104e3c1b64ae7021534eb3e8e4bcf8fb1332416ec",
+                "s": "0x73db3e74788ae23554ad4a6cfa5d1c51c562106974d504ea32100930f5d85d09"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 0,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "nonce-u64-max",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0xffffffffffffffff",
+                "yParity": 0,
+                "r": "0x2da2d4347ee2b1ecd2e7ba1fc7532e25dcf84ab9a59d69afebdc5b648904cb60",
+                "s": "0x59e399798b61862d06ae0863002ccdb2e7827f30790b8f3eb72433d5216cde76"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 0,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-signature",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "s": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 0,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-parity",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 2,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 0,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate-authorization-skipped",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              },
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "codeByAddress": {
+              "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": "0x602a5f5500"
+            }
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "later-authorization-wins",
+      "accounts": {
+        "0x3333333333333333333333333333333333333333": {
+          "code": "0x604d5f5500"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              },
+              {
+                "chainId": "0x0539",
+                "address": "0x3333333333333333333333333333333333333333",
+                "nonce": "0x01",
+                "yParity": 0,
+                "r": "0x2ffc652e663c9677a8865a13b27f7cff7d6de62469aa44e7f62bac6574c939fb",
+                "s": "0x7b28cd79e33acbbc7448ffd275cad57bab27b9c5785eaf716dd6a5b9253f5d89"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 2,
+              "code": "0xef01003333333333333333333333333333333333333333",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000004d"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "revoke-and-call-empty-code",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x0000000000000000000000000000000000000000",
+                "nonce": "0x01",
+                "yParity": 0,
+                "r": "0xf8606311c8d0b4b7973246058a506c8fb536dfbcc0496a5a8dab6f48c1fd4931",
+                "s": "0x365fe620e545556c934165945dff30076be2205c25bbf9f5dd7270230eedecec"
+              }
+            ]
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 2,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "type": 2,
+            "priorityFee": "0x0"
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 2,
+              "code": "0x",
+              "storage": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x000000000000000000000000000000000000000000000000000000000000002a"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegated-CREATE-rejected",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f5f5ff000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": false,
+            "error": "Ethereum(NotActivated)"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegated-CREATE2-rejected",
+      "accounts": {
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f5f5f5ff500"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": false,
+            "error": "Ethereum(NotActivated)"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegated-reserve-violation",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        },
+        "0x2222222222222222222222222222222222222222": {
+          "code": "0x5f5f5f5f673782dace9d9000007344444444444444444444444444444444444444445af15000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 1,
+              "code": "0xef01002222222222222222222222222222222222222222",
+              "balance": "0xa688906bd8b00000"
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reserve-history-parentSendersAndAuthorities",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000",
+            "chainContext": {
+              "parentSendersAndAuthorities": [
+                "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf"
+              ]
+            }
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "balance": "0xa688906bd8b00000",
+              "nonce": 1
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reserve-history-grandparentSendersAndAuthorities",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000",
+            "chainContext": {
+              "grandparentSendersAndAuthorities": [
+                "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf"
+              ]
+            }
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "balance": "0xa688906bd8b00000",
+              "nonce": 1
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "undelegated-fresh-sender-may-spend-reserve",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000"
+          },
+          "result": {
+            "success": true,
+            "error": null
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "balance": "0x6f05b59d3b200000",
+              "nonce": 1
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x3782dace9d900000"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "revoking-sender-still-in-current-authorities",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000",
+          "code": "0xef01002222222222222222222222222222222222222222"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x0000000000000000000000000000000000000000",
+                "nonce": "0x01",
+                "yParity": 0,
+                "r": "0xf8606311c8d0b4b7973246058a506c8fb536dfbcc0496a5a8dab6f48c1fd4931",
+                "s": "0x365fe620e545556c934165945dff30076be2205c25bbf9f5dd7270230eedecec"
+              }
+            ],
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000"
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "nonce": 2,
+              "code": "0x",
+              "balance": "0xa688906bd8b00000"
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "type-3-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 3
+          },
+          "error": "Unsupported transaction type"
+        }
+      ]
+    },
+    {
+      "name": "legacy-access-list-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 0,
+            "accessList": [
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000000"
+                ]
+              }
+            ]
+          },
+          "error": "fields do not match"
+        }
+      ]
+    },
+    {
+      "name": "type-2-authorizations-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 2,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "error": "fields do not match"
+        }
+      ]
+    },
+    {
+      "name": "type-4-empty-list-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": []
+          },
+          "error": "missing authorization list"
+        }
+      ]
+    },
+    {
+      "name": "type-4-creation-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ],
+            "to": null
+          },
+          "error": "target"
+        }
+      ]
+    },
+    {
+      "name": "malformed-storage-key-rejected",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 1,
+            "accessList": [
+              {
+                "address": "0x2222222222222222222222222222222222222222",
+                "storageKeys": [
+                  "0x01"
+                ]
+              }
+            ]
+          },
+          "error": "Invalid access-list storage key"
+        }
+      ]
+    },
+    {
+      "name": "authorization-nonce-overflow",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x10000000000000000",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ]
+          },
+          "error": "nonce exceeds u64"
+        }
+      ]
+    },
+    {
+      "name": "intrinsic-gas-too-low",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "type": 4,
+            "priorityFee": "0x0",
+            "authorizationList": [
+              {
+                "chainId": "0x0539",
+                "address": "0x2222222222222222222222222222222222222222",
+                "nonce": "0x00",
+                "yParity": 1,
+                "r": "0xf928511812c447fa87c31c3be3f7edaef7a566dc4d6328f5a0d066fa3aa27df9",
+                "s": "0x1f99f0fc64d56a66c69c6fe14d5b59b04b2ab99de2fc2654b3a6b4ce6db3a8a5"
+              }
+            ],
+            "gas": 21000
+          },
+          "error": "Gas"
+        }
+      ]
+    },
+    {
+      "name": "reserve-current-block-sender",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000",
+            "chainContext": {
+              "currentBlockSenders": [
+                "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf"
+              ],
+              "currentBlockAuthorities": [
+                []
+              ]
+            }
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "balance": "0xa688906bd8b00000",
+              "nonce": 1
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reserve-current-block-authority",
+      "accounts": {
+        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+          "balance": "0xa688906bd8b00000"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "from": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0x3782dace9d900000",
+            "chainContext": {
+              "currentBlockSenders": [
+                "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+              ],
+              "currentBlockAuthorities": [
+                [
+                  "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf"
+                ]
+              ]
+            }
+          },
+          "result": {
+            "success": false,
+            "error": "ReserveBalanceViolation"
+          },
+          "accounts": {
+            "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf": {
+              "balance": "0xa688906bd8b00000",
+              "nonce": 1
+            },
+            "0x4444444444444444444444444444444444444444": {
+              "balance": "0x0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "mismatched-current-block-metadata",
+      "accounts": {},
+      "steps": [
+        {
+          "request": {
+            "chainContext": {
+              "currentBlockSenders": [
+                "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+              ]
+            }
+          },
+          "error": "equal lengths"
+        }
+      ]
+    }
+  ]
+}
