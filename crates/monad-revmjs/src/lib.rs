@@ -177,6 +177,7 @@ impl Engine {
             "createdAddress": result.created_address().map(|a| format!("{a:#x}")),
             "gasUsed": result.tx_gas_used(), "gasSpent": result.gas().total_gas_spent(),
             "logs": logs, "structLogs": trace.steps, "preimages": trace.preimages,
+            "consoleCalls": trace.console_calls,
             "traceTruncated": trace.truncated
         });
         if request.commit {

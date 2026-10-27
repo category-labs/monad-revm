@@ -54,6 +54,9 @@ export interface ExecutionResult {
   /** Gas actually spent, including intrinsic gas. */
   gasSpent: number
   logs: { address: string, topics: string[], data: string }[]
+  /** Raw 0x calldata sent by STATICCALL to the Hardhat console address when trace is enabled.
+   * Preserved across reverts and independently of instruction-trace truncation. */
+  consoleCalls: string[]
   structLogs: TraceStep[]
   /** Successful KECCAK256 inputs keyed by hash, both unprefixed hex; shares the trace budget. */
   preimages: Record<string, string>

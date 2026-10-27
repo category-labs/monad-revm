@@ -1,11 +1,12 @@
 use monad_revm::{extension, MonadHardfork};
 use revm::{
     bytecode::opcode::{OpCode, KECCAK256},
+    context_interface::ContextTr,
     interpreter::{
         interpreter_types::{InputsTr, Jumps, LegacyBytecode, MemoryTr},
-        Interpreter, InterpreterAction,
+        CallInputs, CallOutcome, CallScheme, Interpreter, InterpreterAction,
     },
-    primitives::{hex, U256},
+    primitives::{address, hex, U256},
     Inspector,
 };
 use serde::Serialize;
@@ -46,6 +47,7 @@ pub(super) struct Step {
 pub(super) struct Trace {
     pub(super) steps: Vec<Step>,
     pub(super) preimages: BTreeMap<String, String>,
+    pub(super) console_calls: Vec<String>,
     pub(super) truncated: bool,
     spec: MonadHardfork,
     bytes: usize,
@@ -57,6 +59,7 @@ impl Trace {
         Self {
             steps: Vec::new(),
             preimages: BTreeMap::new(),
+            console_calls: Vec::new(),
             truncated: false,
             spec,
             bytes: 0,
@@ -80,7 +83,17 @@ impl Trace {
     }
 }
 
-impl<CTX> Inspector<CTX> for Trace {
+impl<CTX: ContextTr> Inspector<CTX> for Trace {
+    fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
+        if inputs.scheme == CallScheme::StaticCall
+            && inputs.target_address == address!("000000000000000000636f6e736f6c652e6c6f67")
+        {
+            // Console output is diagnostic data and survives reverts and trace truncation.
+            self.console_calls.push(hex::encode_prefixed(&*inputs.input.as_bytes(context)));
+        }
+        None
+    }
+
     fn step(&mut self, interp: &mut Interpreter, _ctx: &mut CTX) {
         self.pending = None;
         let size = 128 + interp.stack.data().len() * 66 + interp.memory.size() * 2;
