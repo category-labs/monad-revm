@@ -44,6 +44,46 @@ fn deploy(engine: &mut Engine, runtime: &str) -> String {
     result["createdAddress"].as_str().unwrap().to_owned()
 }
 
+const CONSOLE_CALL: &str = "365f5f375f5f365f73000000000000000000636f6e736f6c652e6c6f675afa50";
+
+#[test]
+fn console_calls_survive_reverts_and_do_not_change_execution() {
+    for spec in ["monad-ten", "monad-next"] {
+        let mut vm = engine(spec);
+        for (suffix, success) in [("60ff5f5300", true), ("60ff5f535f5ffd", false)] {
+            let contract = deploy(&mut vm, &format!("{CONSOLE_CALL}{suffix}"));
+            let before = vm.snapshot().unwrap();
+            let traced = execute(&mut vm, Some(&contract), "0x11223344", false);
+            let plain = execute_with_options(
+                &mut vm,
+                Some(&contract),
+                "0x11223344",
+                json!({ "trace": false }),
+            );
+            assert_eq!(traced["success"], success);
+            assert_eq!(traced["consoleCalls"], json!(["0x11223344"]));
+            assert_eq!(plain["consoleCalls"], json!([]));
+            for field in ["success", "returnValue", "gasUsed", "gasSpent", "logs"] {
+                assert_eq!(traced[field], plain[field], "{field}");
+            }
+            assert_eq!(vm.snapshot().unwrap(), before);
+            let committed = execute(&mut vm, Some(&contract), "0x11223344", true);
+            assert_eq!(committed["consoleCalls"], traced["consoleCalls"]);
+        }
+    }
+}
+
+#[test]
+fn console_calls_continue_after_instruction_trace_truncation() {
+    let mut vm = engine("monad-next");
+    // A finite loop exceeds the step budget before the console call executes.
+    let contract = deploy(&mut vm, &format!("614e205b600190038060035750{CONSOLE_CALL}00"));
+    let result = execute(&mut vm, Some(&contract), "0xaabbccdd", false);
+    assert_eq!(result["success"], true);
+    assert_eq!(result["traceTruncated"], true);
+    assert_eq!(result["consoleCalls"], json!(["0xaabbccdd"]));
+}
+
 #[test]
 fn commit_simulate_snapshot_and_full_limit_charge() {
     let mut vm = engine("monad-next");

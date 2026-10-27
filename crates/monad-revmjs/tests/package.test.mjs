@@ -32,6 +32,28 @@ function deploy(vm, runtime) {
   return result.createdAddress
 }
 
+test('packed module captures console calls across reverts and trace truncation', () => {
+  const consoleCall = '365f5f375f5f365f73000000000000000000636f6e736f6c652e6c6f675afa50'
+  for (const spec of ['monad-ten', 'monad-next']) {
+    const vm = engine(spec)
+    try {
+      for (const [runtime, success, truncated] of [
+        [consoleCall + '60ff5f5300', true, false],
+        [consoleCall + '5f5ffd', false, false],
+        ['614e205b600190038060035750' + consoleCall + '00', true, true]
+      ]) {
+        const contract = deploy(vm, runtime)
+        const before = vm.snapshot()
+        const result = execute(vm, contract, '0x11223344')
+        assert.equal(result.success, success)
+        assert.equal(result.traceTruncated, truncated)
+        assert.deepEqual(result.consoleCalls, ['0x11223344'])
+        assert.equal(vm.snapshot(), before)
+      }
+    } finally { vm.free() }
+  }
+})
+
 test('packed module executes, simulates, commits and restores state', () => {
   const vm = engine()
   const restored = engine()
