@@ -39,6 +39,7 @@ engine.free()
 - `fund(address, balance)`: set a development balance, preserving code and nonce.
 - `account(address)`: JSON containing balance, nonce, code and nonzero storage slots.
 - `execute(requestJson)`: execute a JSON `ExecuteRequest`, returning JSON `ExecutionResult`. TypeScript interfaces for both are exported by the package.
+- `staking_transition(requestJson)`: apply or simulate one explicit [staking lifecycle operation](staking.md), returning JSON `StakingResult`.
 - `set_block_hash(number, hash)`: supply a hash for `BLOCKHASH`; the current API accepts a 32-bit block number here. Unsupplied hashes return zero, including after snapshot restoration. The usual `BLOCKHASH` range restrictions still apply.
 - `snapshot()` / `restore(snapshotJson)`: versioned engine state. Restore validates all fields and bytecode before replacing state; invalid snapshots throw a recoverable error and leave the engine unchanged.
 - `free()`: release the engine's WASM allocation.
@@ -68,4 +69,4 @@ With `trace: true`, `consoleCalls` contains the raw `0x` calldata from `STATICCA
 
 With tracing enabled, `codeByAddress` records the runtime bytecode actually executed at each called address, with EIP-7702 delegation resolved. It shares the trace byte budget and remains available for reverted or simulated executions. Debuggers can use this code after a later delegation change without querying current account code. Contract creation code remains in the creation frame's input. Without tracing, the map is empty.
 
-The API is for a local development VM. It does not provide historical context discovery, staking system transitions, remote database callbacks or a JSON-RPC provider. Blob transactions are unsupported by Monad. Execution is synchronous; use a worker for browser responsiveness.
+The API is for a local development VM. It does not discover historical context, schedule staking transitions, provide remote database callbacks or implement a JSON-RPC provider. Blob transactions are unsupported by Monad. Execution is synchronous; use a worker for browser responsiveness.
