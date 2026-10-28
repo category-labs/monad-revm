@@ -29,3 +29,4 @@ provider behavior. Execution is synchronous; use a worker in the browser. The op
 
 - [Browser/Node initialization, API, traces and limitations](docs/api.md)
 - [Build, package tests and distribution](docs/development.md)
+- [Local staking transitions and parity tests](docs/staking.md)

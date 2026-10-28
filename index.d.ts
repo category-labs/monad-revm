@@ -3,6 +3,26 @@ export type { InitInput, InitOutput, SyncInitInput } from './dist/monad_revmjs.j
 
 export type MonadSpec = 'monad-ten' | 'monad-next'
 
+/** Explicit local lifecycle operations; the host decides when they occur. */
+export type StakingAction = { kind: 'snapshot' } | { kind: 'epochChange'; epoch: string } | { kind: 'reward'; author: string; amount: string }
+
+/** JSON input to Engine.staking_transition. Epoch and amount are exact hex quantities. */
+export interface StakingRequest {
+  action: StakingAction
+  blockNumber: number
+  timestamp: number
+  commit: boolean
+}
+
+/** System operations have no user nonce, transaction fee or EVM instruction trace. */
+export interface StakingResult {
+  success: boolean
+  error: string | null
+  returnValue: string
+  gasSpent: number
+  logs: { address: string; topics: string[]; data: string }[]
+}
+
 export interface AccessListEntry {
   address: string
   storageKeys: string[]

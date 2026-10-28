@@ -36,6 +36,11 @@ export class Engine {
      * Export versioned JSON state, independent of any browser persistence mechanism.
      */
     snapshot(): string;
+    /**
+     * Apply or simulate one local staking system transition without a user transaction.
+     * Failed transitions, including reward minting, never change the database.
+     */
+    staking_transition(request: string): string;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -50,6 +55,7 @@ export interface InitOutput {
     readonly engine_restore: (a: number, b: number, c: number, d: number) => void;
     readonly engine_set_block_hash: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly engine_snapshot: (a: number, b: number) => void;
+    readonly engine_staking_transition: (a: number, b: number, c: number, d: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
