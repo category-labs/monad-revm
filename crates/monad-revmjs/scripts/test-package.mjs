@@ -40,8 +40,15 @@ try {
       cwd: path.resolve(crate, '../..'), stdio: ['ignore', transactionOutput, 'inherit']
     })
   } finally { closeSync(transactionOutput) }
-  run(process.execPath, ['--test', path.join(crate, 'tests/package.test.mjs'), path.join(crate, 'tests/precompiles.test.mjs'), path.join(crate, 'tests/transactions.test.mjs')], {
-    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project, MONAD_REVMJS_NATIVE_RESULTS: nativeResults, MONAD_REVMJS_NATIVE_TRANSACTIONS: nativeTransactions }
+  const nativeStaking = path.join(project, 'native-staking.json')
+  const stakingOutput = openSync(nativeStaking, 'w')
+  try {
+    run('cargo', ['+1.91', 'run', '--locked', '-p', 'monad-revmjs', '--example', 'staking_results', '--features', 'monad-revm/default'], {
+      cwd: path.resolve(crate, '../..'), stdio: ['ignore', stakingOutput, 'inherit']
+    })
+  } finally { closeSync(stakingOutput) }
+  run(process.execPath, ['--test', ...['package', 'precompiles', 'transactions', 'staking'].map(name => path.join(crate, `tests/${name}.test.mjs`))], {
+    env: { ...process.env, MONAD_REVMJS_TEST_PROJECT: project, MONAD_REVMJS_NATIVE_RESULTS: nativeResults, MONAD_REVMJS_NATIVE_TRANSACTIONS: nativeTransactions, MONAD_REVMJS_NATIVE_STAKING: nativeStaking }
   })
   console.log(`Verified installable package: ${path.join(output, archive.filename)}`)
 } finally {

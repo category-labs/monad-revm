@@ -1,0 +1,804 @@
+{
+  "note": "Local fixtures deliberately use unverified addValidator signatures and the native simplified author lookup. Forwarders execute CALL, caller REVERT and STATICCALL against 0x1000.",
+  "payer": "0x1111111111111111111111111111111111111111",
+  "staking": "0x0000000000000000000000000000000000001000",
+  "accounts": {
+    "0x1111111111111111111111111111111111111111": {
+      "balance": "0x108b2a2c28029094000000",
+      "nonce": 0,
+      "code": "0x",
+      "storage": {}
+    },
+    "0x2222222222222222222222222222222222222222": {
+      "balance": "0x108b2a2c28029094000000",
+      "nonce": 0,
+      "code": "0x",
+      "storage": {}
+    },
+    "0x0000000000000000000000000000000000001000": {
+      "balance": "0x0",
+      "nonce": 0,
+      "code": "0x",
+      "storage": {}
+    },
+    "0x3333333333333333333333333333333333333333": {
+      "balance": "0x0",
+      "nonce": 0,
+      "code": "0x365f5f375f5f365f346110005af15f523d5f60203e3d6020015ff3",
+      "storage": {}
+    },
+    "0x4444444444444444444444444444444444444444": {
+      "balance": "0x0",
+      "nonce": 0,
+      "code": "0x365f5f375f5f365f346110005af1505f5ffd",
+      "storage": {}
+    },
+    "0x5555555555555555555555555555555555555555": {
+      "balance": "0x0",
+      "nonce": 0,
+      "code": "0x365f5f375f5f365f6110005afa5f523d5f60203e3d6020015ff3",
+      "storage": {}
+    }
+  },
+  "cases": [
+    {
+      "name": "staking lifecycle",
+      "steps": [
+        {
+          "name": "register fixture validator with unverified signatures",
+          "request": {
+            "data": "0xf145204c0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001a000000000000000000000000000000000000000000000000000000000000000a50211111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222221111111111111111111111111111111111111111000000000000000000000000000000000000000000084595161401484a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "value": "0x84595161401484a000000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 3
+        },
+        {
+          "name": "delegate before boundary",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "from": "0x2222222222222222222222222222222222222222",
+            "value": "0x84595161401484a000000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "read epoch 0/true",
+          "request": {
+            "data": "0x757991a8"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 1",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x1"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "read epoch 1/false",
+          "request": {
+            "data": "0x757991a8"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "mint reward for active validator",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "0x8ac7230489e80000"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1,
+          "accounts": {
+            "0x0000000000000000000000000000000000001000": {
+              "balance": "0x108b2ab6ef25951de80000"
+            },
+            "0x1111111111111111111111111111111111111111": {
+              "nonce": 3
+            }
+          }
+        },
+        {
+          "name": "read reward proposer",
+          "request": {
+            "data": "0xfbacb0be"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "claim delegator rewards",
+          "request": {
+            "data": "0xa76e2ca50000000000000000000000000000000000000000000000000000000000000001",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1,
+          "accounts": {
+            "0x2222222222222222222222222222222222222222": {
+              "balance": "0x845955b7792ca8ef40000"
+            },
+            "0x0000000000000000000000000000000000001000": {
+              "balance": "0x108b2a718b9412d8f40000"
+            }
+          }
+        },
+        {
+          "name": "undelegate all stake",
+          "request": {
+            "data": "0x5cf415140000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000084595161401484a0000000000000000000000000000000000000000000000000000000000000000000007",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "withdrawal before activation fails",
+          "request": {
+            "data": "0xaed2ee7300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000007",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 2",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x2"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "withdrawal before delay fails",
+          "request": {
+            "data": "0xaed2ee7300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000007",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 3",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x3"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "withdraw principal",
+          "request": {
+            "data": "0xaed2ee7300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000007",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1,
+          "accounts": {
+            "0x2222222222222222222222222222222222222222": {
+              "balance": "0x108b2a718b9412d8f40000"
+            },
+            "0x0000000000000000000000000000000000001000": {
+              "balance": "0x845955b7792ca8ef40000"
+            }
+          }
+        },
+        {
+          "name": "duplicate withdrawal fails",
+          "request": {
+            "data": "0xaed2ee7300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000007",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        }
+      ]
+    },
+    {
+      "name": "failures and nested rollback",
+      "steps": [
+        {
+          "name": "register fixture validator with unverified signatures",
+          "request": {
+            "data": "0xf145204c0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001a000000000000000000000000000000000000000000000000000000000000000a50211111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222221111111111111111111111111111111111111111000000000000000000000000000000000000000000084595161401484a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "value": "0x84595161401484a000000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 3
+        },
+        {
+          "name": "nested getter uses CALL",
+          "request": {
+            "data": "0x757991a8",
+            "to": "0x3333333333333333333333333333333333333333"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "static caller rejects staking getters too",
+          "request": {
+            "data": "0x757991a8",
+            "to": "0x5555555555555555555555555555555555555555"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "nested delegation",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "to": "0x3333333333333333333333333333333333333333",
+            "value": "0xde0b6b3a7640000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "caller revert rolls back staking and value",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "to": "0x4444444444444444444444444444444444444444",
+            "value": "0xde0b6b3a7640000"
+          },
+          "result": {
+            "success": false,
+            "returnValue": "0x"
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "static caller rejects staking writes",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "to": "0x5555555555555555555555555555555555555555"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "malformed delegate calldata",
+          "request": {
+            "data": "0x84994fec"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "nonpayable staking call",
+          "request": {
+            "data": "0x757991a8",
+            "value": "0x1"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "staking gas exhaustion",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "gas": 23000,
+            "value": "0xde0b6b3a7640000"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "unauthorized snapshot",
+          "request": {
+            "data": "0x157eeb21"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "unauthorized epoch change",
+          "request": {
+            "data": "0x1d4e9f020000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "unauthorized reward",
+          "request": {
+            "data": "0x791bdcf30000000000000000000000001111111111111111111111111111111111111111"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "unknown validator",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000063",
+            "value": "0xde0b6b3a7640000"
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0,
+          "stakingUnchanged": true
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "duplicate snapshot fails atomically",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 1",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x1"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "non-increasing epoch fails atomically",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x1"
+            }
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0
+        },
+        {
+          "name": "unknown author cannot mint rewards",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x2222222222222222222222222222222222222222",
+              "amount": "0xde0b6b3a7640000"
+            }
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0
+        },
+        {
+          "name": "oversized reward rolls back mint and storage",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "0x8000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "result": {
+            "success": false
+          },
+          "logCount": 0
+        }
+      ]
+    },
+    {
+      "name": "epoch delay and rewards",
+      "steps": [
+        {
+          "name": "register fixture validator with unverified signatures",
+          "request": {
+            "data": "0xf145204c0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001a000000000000000000000000000000000000000000000000000000000000000a50211111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222221111111111111111111111111111111111111111000000000000000000000000000000000000000000084595161401484a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "value": "0x84595161401484a000000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 3
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 1",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x1"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "reward outside boundary",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "0x3782dace9d900000"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "reward uses snapshot during boundary",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "0x53444835ec580000"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "delegate during delay",
+          "request": {
+            "data": "0x84994fec0000000000000000000000000000000000000000000000000000000000000001",
+            "from": "0x2222222222222222222222222222222222222222",
+            "value": "0x84595161401484a000000"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "advance epoch 2",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x2"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "claim existing validator rewards",
+          "request": {
+            "data": "0xa76e2ca50000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 1,
+          "accounts": {
+            "0x1111111111111111111111111111111111111111": {
+              "balance": "0x84595a0db244cd3e80000"
+            }
+          }
+        },
+        {
+          "name": "snapshot execution validators",
+          "request": {
+            "action": {
+              "kind": "snapshot"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 0
+        },
+        {
+          "name": "advance epoch 3",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x3"
+            }
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x"
+          },
+          "logCount": 1
+        },
+        {
+          "name": "compound with no rewards",
+          "request": {
+            "data": "0xb34fea670000000000000000000000000000000000000000000000000000000000000001",
+            "from": "0x2222222222222222222222222222222222222222"
+          },
+          "result": {
+            "success": true,
+            "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "logCount": 0
+        }
+      ]
+    },
+    {
+      "name": "malformed system operations",
+      "steps": [
+        {
+          "name": "reject maximal epoch before native successor arithmetic",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0xffffffffffffffff"
+            }
+          },
+          "error": "below u64::MAX"
+        },
+        {
+          "name": "reject oversized epoch",
+          "request": {
+            "action": {
+              "kind": "epochChange",
+              "epoch": "0x10000000000000000"
+            }
+          },
+          "error": "exceeds u64"
+        },
+        {
+          "name": "reject malformed author",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "bad",
+              "amount": "0x1"
+            }
+          },
+          "error": "Invalid address"
+        },
+        {
+          "name": "reject negative reward",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "-1"
+            }
+          },
+          "error": "Invalid 256-bit quantity"
+        },
+        {
+          "name": "reject extra operation fields",
+          "request": {
+            "action": {
+              "kind": "snapshot",
+              "amount": "0x1"
+            }
+          },
+          "error": "unknown field"
+        },
+        {
+          "name": "reject arbitrary system calls",
+          "request": {
+            "action": {
+              "kind": "call",
+              "to": "0x1111111111111111111111111111111111111111",
+              "data": "0x"
+            }
+          },
+          "error": "unknown variant"
+        }
+      ]
+    },
+    {
+      "name": "reward balance overflow",
+      "accounts": {
+        "0x0000000000000000000000000000000000001000": {
+          "balance": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "nonce": 0,
+          "code": "0x",
+          "storage": {}
+        }
+      },
+      "steps": [
+        {
+          "name": "checked reward balance mint",
+          "request": {
+            "action": {
+              "kind": "reward",
+              "author": "0x1111111111111111111111111111111111111111",
+              "amount": "0x1"
+            }
+          },
+          "error": "Staking balance overflow"
+        }
+      ]
+    }
+  ]
+}

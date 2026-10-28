@@ -1,6 +1,7 @@
 //! JavaScript-accessible execution, state and inspection for a local Monad VM.
 
 mod database;
+mod staking;
 mod trace;
 mod transaction;
 
@@ -123,6 +124,12 @@ impl Engine {
         let hash = B256::from_str(hash).map_err(|e| e.to_string())?;
         self.db.cache.block_hashes.insert(U256::from(number), hash);
         Ok(())
+    }
+
+    /// Apply or simulate one local staking system transition without a user transaction.
+    /// Failed transitions, including reward minting, never change the database.
+    pub fn staking_transition(&mut self, request: &str) -> Result<String, String> {
+        staking::execute(self, request)
     }
 
     /// Execute against an isolated cache, applying state only for committed transactions.
