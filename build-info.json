@@ -1,6 +1,6 @@
 {
   "sourceRepository": "https://github.com/category-labs/monad-revm",
-  "sourceRevision": "f831f6de7df75665f67810bac6b225603c8b04a7",
+  "sourceRevision": "3e5c05f2032574e1be271115102529e6c885c2ed",
   "sourceDirty": false,
   "cargoLockSha256": "2bd417958ff6a211e9b53eb4e8d195026ad6ee2e6026ef011dde635f0d262de9",
   "rustToolchain": "1.91",

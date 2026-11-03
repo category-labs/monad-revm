@@ -31,7 +31,7 @@ const engine = new Engine('monad-ten', 1337)
 engine.free()
 ```
 
-`Monad Ten` and experimental `Monad Next` are explicit choices. `Monad Next` enables the extension instructions supported by the engine revision; it is not a declaration of public-network activation.
+`Monad Eight`, `Monad Nine`, `Monad Ten` and experimental `Monad Next` are explicit choices. Eight uses the Prague baseline; Nine, Ten and Next use Osaka, with each fork's Monad rules applied by the engine. `Monad Next` enables the extension instructions supported by the engine revision; it is not a declaration of public-network activation.
 
 ## API and ownership
 
