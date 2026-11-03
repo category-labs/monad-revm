@@ -1,7 +1,7 @@
 export { default, Engine, initSync } from './dist/monad_revmjs.js'
 export type { InitInput, InitOutput, SyncInitInput } from './dist/monad_revmjs.js'
 
-export type MonadSpec = 'monad-ten' | 'monad-next'
+export type MonadSpec = 'monad-eight' | 'monad-nine' | 'monad-ten' | 'monad-next'
 
 /** Explicit local lifecycle operations; the host decides when they occur. */
 export type StakingAction = { kind: 'snapshot' } | { kind: 'epochChange'; epoch: string } | { kind: 'reward'; author: string; amount: string }

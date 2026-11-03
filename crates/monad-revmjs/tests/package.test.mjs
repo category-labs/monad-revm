@@ -34,7 +34,7 @@ function deploy(vm, runtime) {
 
 test('packed module captures console calls across reverts and trace truncation', () => {
   const consoleCall = '365f5f375f5f365f73000000000000000000636f6e736f6c652e6c6f675afa50'
-  for (const spec of ['monad-ten', 'monad-next']) {
+  for (const spec of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
     const vm = engine(spec)
     try {
       for (const [runtime, success, truncated] of [
@@ -75,7 +75,7 @@ test('packed module executes, simulates, commits and restores state', () => {
 })
 
 test('packed module preserves extension PCs, stack effects and specification gating', () => {
-  for (const spec of ['monad-ten', 'monad-next']) {
+  for (const spec of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
     const vm = engine(spec)
     try {
       const depth = execute(vm, deploy(vm, 'ae005f5260205ff3'))
@@ -107,7 +107,7 @@ test('execution uses caller-supplied block context', () => {
 })
 
 test('missing block hashes are zero and supplied hashes survive restoration', () => {
-  for (const spec of ['monad-ten', 'monad-next']) {
+  for (const spec of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
     const vm = engine(spec)
     const restored = engine(spec)
     try {
@@ -225,4 +225,32 @@ test('package contains source provenance and no runtime build dependency', () =>
   assert.match(info.sourceRevision, /^[0-9a-f]{40}$/)
   assert.match(info.cargoLockSha256, /^[0-9a-f]{64}$/)
   assert.equal(info.target, 'wasm32-unknown-unknown')
+})
+
+test('all fork snapshots are isolated and CLZ activates at Monad Nine', () => {
+  const forks = ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']
+  assert.throws(() => new Engine('monad-future', 1337))
+  for (const spec of forks) {
+    const vm = engine(spec)
+    try {
+      const result = execute(vm, deploy(vm, '60011e5f5260205ff3'), '0x', { commit: true })
+      assert.equal(result.success, spec !== 'monad-eight')
+      assert.equal(result.structLogs[1].pc, 2)
+      assert.equal(result.structLogs[1].op, spec === 'monad-eight' ? 'INVALID' : 'CLZ')
+      const snapshot = vm.snapshot()
+      for (const target of forks) {
+        const restored = engine(target)
+        try {
+          const before = restored.snapshot()
+          if (target === spec) {
+            restored.restore(snapshot)
+            assert.equal(restored.snapshot(), snapshot)
+          } else {
+            assert.throws(() => restored.restore(snapshot))
+            assert.equal(restored.snapshot(), before)
+          }
+        } finally { restored.free() }
+      }
+    } finally { vm.free() }
+  }
 })

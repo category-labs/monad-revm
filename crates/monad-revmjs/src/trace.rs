@@ -1,6 +1,6 @@
 use monad_revm::{extension, MonadHardfork};
 use revm::{
-    bytecode::opcode::{OpCode, KECCAK256},
+    bytecode::opcode::{OpCode, CLZ, KECCAK256},
     context_interface::ContextTr,
     interpreter::{
         interpreter_types::{InputsTr, Jumps, LegacyBytecode, MemoryTr},
@@ -136,6 +136,8 @@ impl<CTX: ContextTr> Inspector<CTX> for Trace {
                 Some(&extension::CALLERN_SELECTOR) => "CALLERN",
                 _ => "INVALID",
             }
+        } else if opcode == CLZ && self.spec == MonadHardfork::MonadEight {
+            "INVALID"
         } else {
             OpCode::new(opcode).map_or("INVALID", OpCode::as_str)
         };

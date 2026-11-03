@@ -1,6 +1,7 @@
 use monad_revmjs::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 const SENDER: &str = "0x1111111111111111111111111111111111111111";
 const TX_GAS: u64 = 3_000_000;
@@ -10,6 +11,14 @@ struct Vector {
     name: String,
     address: u16,
     input: String,
+    #[serde(flatten)]
+    expected: Outcome,
+    #[serde(default)]
+    forks: BTreeMap<String, Outcome>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Outcome {
     output: String,
     gas: u64,
     success: bool,
@@ -32,12 +41,14 @@ pub(crate) fn report() -> Value {
     let vectors: Vec<Vector> =
         serde_json::from_str(include_str!("../fixtures/precompiles.json")).unwrap();
     let mut report = serde_json::Map::new();
-    for fork in ["monad-ten", "monad-next"] {
+    for fork in ["monad-eight", "monad-nine", "monad-ten", "monad-next"] {
         for vector in &vectors {
-            let mut variants = vec![("exact", vector.gas, vector.success, vector.output.as_str())];
-            if vector.success {
-                variants.push(("surplus", vector.gas + 123, true, vector.output.as_str()));
-                variants.push(("out-of-gas", vector.gas - 1, false, "0x"));
+            let expected = vector.forks.get(fork).unwrap_or(&vector.expected);
+            let mut variants =
+                vec![("exact", expected.gas, expected.success, expected.output.as_str())];
+            if expected.success {
+                variants.push(("surplus", expected.gas + 123, true, expected.output.as_str()));
+                variants.push(("out-of-gas", expected.gas - 1, false, "0x"));
             }
             for (variant, gas_limit, success, output) in variants {
                 let label = format!("{fork}/{}/{variant}", vector.name);
@@ -73,7 +84,7 @@ pub(crate) fn report() -> Value {
                 // across the call so refunded, unused forwarded gas is included.
                 assert_eq!(
                     consumed,
-                    100 + if success { vector.gas } else { gas_limit },
+                    100 + if success { expected.gas } else { gas_limit },
                     "{label}: gas"
                 );
                 let plain = execute(&mut vm, Some(address), &vector.input, false, false);

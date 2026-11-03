@@ -95,9 +95,16 @@ impl Engine {
     #[wasm_bindgen(constructor)]
     pub fn new(spec: &str, chain_id: u32) -> Result<Self, String> {
         let spec = match spec {
+            "monad-eight" => MonadHardfork::MonadEight,
+            "monad-nine" => MonadHardfork::MonadNine,
             "monad-ten" => MonadHardfork::MonadTen,
             "monad-next" => MonadHardfork::MonadNext,
-            _ => return Err("Supported specifications: monad-ten, monad-next".into()),
+            _ => {
+                return Err(
+                    "Supported specifications: monad-eight, monad-nine, monad-ten, monad-next"
+                        .into(),
+                )
+            }
         };
         Ok(Self { db: LocalDB::default(), spec, chain_id: chain_id.into() })
     }
