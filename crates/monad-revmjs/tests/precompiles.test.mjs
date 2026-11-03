@@ -23,8 +23,9 @@ function execute(vm, to, data, commit, trace) {
 }
 
 const labels = []
-for (const fork of ['monad-ten', 'monad-next']) {
-  for (const vector of vectors) {
+for (const fork of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
+  for (const fixture of vectors) {
+    const vector = { ...fixture, ...fixture.forks?.[fork] }
     const variants = [['exact', vector.gas, vector.success, vector.output]]
     if (vector.success) variants.push(['surplus', vector.gas + 123, true, vector.output], ['out-of-gas', vector.gas - 1, false, '0x'])
     for (const [variant, gasLimit, success, output] of variants) {

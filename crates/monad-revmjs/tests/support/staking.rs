@@ -14,7 +14,7 @@ fn subset(actual: &Value, expected: &Value, label: &str) {
 pub(crate) fn report() -> Value {
     let fixtures: Value = serde_json::from_str(include_str!("../fixtures/staking.json")).unwrap();
     let mut report = serde_json::Map::new();
-    for fork in ["monad-ten", "monad-next"] {
+    for fork in ["monad-eight", "monad-nine", "monad-ten", "monad-next"] {
         for case in fixtures["cases"].as_array().unwrap() {
             let label = format!("{fork}/{}", case["name"].as_str().unwrap());
             let mut vm = Engine::new(fork, 1337).unwrap();

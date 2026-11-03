@@ -1,5 +1,5 @@
 {
-  "description": "Deterministic local transaction vectors. Authorizations signed with ethers 6.14.0 using private keys 1 (payer) and 2 (authority). Expected semantics follow EIP-2930, EIP-7702 and monad-revm reserve/delegated-creation rules; bytecode is embedded in the account fixtures.",
+  "description": "Deterministic local transaction vectors. Authorizations signed with ethers 6.14.0 using private keys 1 (payer) and 2 (authority). Expected semantics follow EIP-2930, EIP-7702 and monad-revm reserve/delegated-creation rules; bytecode is embedded in the account fixtures. Fork-specific gas expectations include Prague memory expansion (3 * words + words^2 / 512) versus MIP-3 (words / 2), plus instruction base costs.",
   "payer": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
   "authority": "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
   "accounts": {
@@ -102,6 +102,11 @@
           "accounts": {},
           "opcodeCosts": {
             "SLOAD": 100
+          },
+          "resultByFork": {
+            "monad-eight": {
+              "gasSpent": 25415
+            }
           }
         }
       ]
@@ -140,6 +145,11 @@
           "accounts": {},
           "opcodeCosts": {
             "SLOAD": 100
+          },
+          "resultByFork": {
+            "monad-eight": {
+              "gasSpent": 25415
+            }
           }
         }
       ]
@@ -183,6 +193,11 @@
           "accounts": {},
           "opcodeCosts": {
             "SLOAD": 100
+          },
+          "resultByFork": {
+            "monad-eight": {
+              "gasSpent": 29715
+            }
           }
         }
       ]
@@ -1210,6 +1225,88 @@
             }
           },
           "error": "equal lengths"
+        }
+      ]
+    },
+    {
+      "name": "clz-activation",
+      "accounts": {
+        "0x3333333333333333333333333333333333333333": {
+          "code": "0x60011e5f5260205ff3"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "to": "0x3333333333333333333333333333333333333333"
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "returnValue": "0x00000000000000000000000000000000000000000000000000000000000000ff"
+          },
+          "resultByFork": {
+            "monad-eight": {
+              "success": false,
+              "error": "Ethereum(NotActivated)",
+              "returnValue": "0x"
+            }
+          },
+          "accounts": {}
+        }
+      ]
+    },
+    {
+      "name": "linear-memory-cost",
+      "accounts": {
+        "0x3333333333333333333333333333333333333333": {
+          "code": "0x60016110005200"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "to": "0x3333333333333333333333333333333333333333"
+          },
+          "result": {
+            "success": true,
+            "error": null,
+            "gasSpent": 21073
+          },
+          "resultByFork": {
+            "monad-eight": {
+              "gasSpent": 21428
+            }
+          },
+          "accounts": {}
+        }
+      ]
+    },
+    {
+      "name": "extension-activation",
+      "accounts": {
+        "0x3333333333333333333333333333333333333333": {
+          "code": "0xae005f5260205ff3"
+        }
+      },
+      "steps": [
+        {
+          "request": {
+            "to": "0x3333333333333333333333333333333333333333"
+          },
+          "result": {
+            "success": false,
+            "error": "Ethereum(OpcodeNotFound)",
+            "returnValue": "0x"
+          },
+          "resultByFork": {
+            "monad-next": {
+              "success": true,
+              "error": null,
+              "returnValue": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "accounts": {}
         }
       ]
     }

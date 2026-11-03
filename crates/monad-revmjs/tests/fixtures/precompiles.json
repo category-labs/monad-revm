@@ -78,7 +78,14 @@
     "output": "0x05",
     "gas": 500,
     "success": true,
-    "source": "3**5 mod 7 = 5; Osaka EIP-7883 minimum gas"
+    "source": "3**5 mod 7 = 5; Osaka EIP-7883 minimum gas; Prague EIP-2565 minimum gas is 200",
+    "forks": {
+      "monad-eight": {
+        "gas": 200,
+        "success": true,
+        "output": "0x05"
+      }
+    }
   },
   {
     "name": "modexp-oversized",
@@ -87,7 +94,14 @@
     "output": "0x",
     "gas": 1000,
     "success": false,
-    "source": "EIP-7823 rejects operand length above 1024 bytes"
+    "source": "EIP-7823 rejects operand length above 1024 bytes; Prague permits it, charging ceil(1025/8)^2 / 3 gas",
+    "forks": {
+      "monad-eight": {
+        "gas": 5547,
+        "success": true,
+        "output": "0x"
+      }
+    }
   },
   {
     "name": "bn254-add",

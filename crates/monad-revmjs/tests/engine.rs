@@ -47,8 +47,38 @@ fn deploy(engine: &mut Engine, runtime: &str) -> String {
 const CONSOLE_CALL: &str = "365f5f375f5f365f73000000000000000000636f6e736f6c652e6c6f675afa50";
 
 #[test]
+fn clz_activation_and_snapshot_fork_isolation() {
+    let forks = ["monad-eight", "monad-nine", "monad-ten", "monad-next"];
+    assert!(Engine::new("monad-future", 1337).is_err());
+    for spec in forks {
+        let mut vm = engine(spec);
+        let contract = deploy(&mut vm, "60011e5f5260205ff3");
+        let result = execute(&mut vm, Some(&contract), "0x", true);
+        assert_eq!(result["success"], spec != "monad-eight");
+        assert_eq!(result["structLogs"][1]["pc"], 2);
+        assert_eq!(
+            result["structLogs"][1]["op"],
+            if spec == "monad-eight" { "INVALID" } else { "CLZ" }
+        );
+        let snapshot = vm.snapshot().unwrap();
+        for target in forks {
+            let mut restored = engine(target);
+            let before = restored.snapshot().unwrap();
+            let result = restored.restore(&snapshot);
+            if spec == target {
+                result.unwrap();
+                assert_eq!(restored.snapshot().unwrap(), snapshot);
+            } else {
+                assert!(result.is_err());
+                assert_eq!(restored.snapshot().unwrap(), before);
+            }
+        }
+    }
+}
+
+#[test]
 fn console_calls_survive_reverts_and_do_not_change_execution() {
-    for spec in ["monad-ten", "monad-next"] {
+    for spec in ["monad-eight", "monad-nine", "monad-ten", "monad-next"] {
         let mut vm = engine(spec);
         for (suffix, success) in [("60ff5f5300", true), ("60ff5f535f5ffd", false)] {
             let contract = deploy(&mut vm, &format!("{CONSOLE_CALL}{suffix}"));
@@ -157,7 +187,7 @@ fn malformed_restore_is_atomic_and_spec_specific() {
 
 #[test]
 fn block_hashes_require_supplied_history_before_and_after_restore() {
-    for spec in ["monad-ten", "monad-next"] {
+    for spec in ["monad-eight", "monad-nine", "monad-ten", "monad-next"] {
         let mut vm = engine(spec);
         let contract = deploy(&mut vm, "6001405f5260205ff3");
         let mut restored = engine(spec);

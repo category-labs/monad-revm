@@ -1,4 +1,4 @@
-//! Shared known-answer precompile vectors for both supported Monad forks.
+//! Shared known-answer precompile vectors for all supported Monad forks.
 
 #[path = "support/precompiles.rs"]
 mod precompiles;

@@ -18,7 +18,7 @@ function subset(actual, expected) {
 }
 
 const labels = []
-for (const fork of ['monad-ten', 'monad-next']) {
+for (const fork of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
   for (const fixture of fixtures.cases) {
     const label = `${fork}/${fixture.name}`
     labels.push(label)
@@ -52,7 +52,7 @@ for (const fork of ['monad-ten', 'monad-next']) {
             continue
           }
           const result = JSON.parse(vm.execute(JSON.stringify(request)))
-          subset(result, step.result)
+          subset(result, { ...step.result, ...step.resultByFork?.[fork] })
           assert.equal(result.gasUsed, request.gas)
           for (const [opcode, cost] of Object.entries(step.opcodeCosts || {})) {
             assert.equal(result.structLogs.find(entry => entry.op === opcode).gasCost, cost)

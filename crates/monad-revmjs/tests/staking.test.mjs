@@ -18,7 +18,7 @@ function subset(actual, expected) {
 }
 
 const labels = []
-for (const fork of ['monad-ten', 'monad-next']) {
+for (const fork of ['monad-eight', 'monad-nine', 'monad-ten', 'monad-next']) {
   for (const fixture of fixtures.cases) {
     const label = `${fork}/${fixture.name}`
     labels.push(label)

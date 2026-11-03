@@ -15,7 +15,7 @@ pub(crate) fn report() -> Value {
     let fixtures: Value =
         serde_json::from_str(include_str!("../fixtures/transactions.json")).unwrap();
     let mut report = serde_json::Map::new();
-    for fork in ["monad-ten", "monad-next"] {
+    for fork in ["monad-eight", "monad-nine", "monad-ten", "monad-next"] {
         for case in fixtures["cases"].as_array().unwrap() {
             let label = format!("{fork}/{}", case["name"].as_str().unwrap());
             let mut vm = Engine::new(fork, 1337).unwrap();
@@ -65,7 +65,11 @@ pub(crate) fn report() -> Value {
                 let result: Value =
                     serde_json::from_str(&output.unwrap_or_else(|e| panic!("{label}: {e}")))
                         .unwrap();
-                subset(&result, &step["result"], &label);
+                let mut expected = step["result"].clone();
+                if let Some(overrides) = step["resultByFork"][fork].as_object() {
+                    expected.as_object_mut().unwrap().extend(overrides.clone());
+                }
+                subset(&result, &expected, &label);
                 assert_eq!(result["gasUsed"], request["gas"], "{label}: full-limit charge");
                 if let Some(costs) = step["opcodeCosts"].as_object() {
                     for (opcode, cost) in costs {
